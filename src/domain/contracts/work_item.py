@@ -1,0 +1,33 @@
+"""Work item contract for shared workspace state."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class WorkStatus(str, Enum):
+    PLANNED = "PLANNED"
+    WAITING = "WAITING"
+    IN_PROGRESS = "IN_PROGRESS"
+    DONE = "DONE"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+
+
+class WorkItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    task_id: str
+    agent_id: str
+    status: WorkStatus = WorkStatus.PLANNED
+    result: dict[str, object] | None = None
+    created_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now)
