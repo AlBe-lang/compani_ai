@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+from ._utils import utc_now
+from .task_result import TaskResult
 
 
 class WorkStatus(str, Enum):
@@ -28,6 +27,6 @@ class WorkItem(BaseModel):
     task_id: str
     agent_id: str
     status: WorkStatus = WorkStatus.PLANNED
-    result: dict[str, object] | None = None
-    created_at: datetime = Field(default_factory=_utc_now)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    result: TaskResult | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

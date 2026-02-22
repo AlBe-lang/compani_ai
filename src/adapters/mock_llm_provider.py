@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from domain.ports import LLMMessage
+
 
 class MockLLMProvider:
     """Return preconfigured responses without external calls."""
@@ -18,7 +20,7 @@ class MockLLMProvider:
     async def generate(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: list[LLMMessage],
         **kwargs: object,
     ) -> str:
         self.calls.append(

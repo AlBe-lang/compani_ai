@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from domain.contracts import WorkItem, WorkStatus
+from domain.contracts import TaskResult, WorkItem, WorkStatus
 
 
 def test_work_item_serialization_roundtrip() -> None:
@@ -9,12 +9,20 @@ def test_work_item_serialization_roundtrip() -> None:
         task_id="task-1",
         agent_id="backend",
         status=WorkStatus.IN_PROGRESS,
-        result={"step": "started"},
+        result=TaskResult(
+            task_id="task-1",
+            agent_id="backend",
+            approach="started",
+            code="pass",
+            files=[],
+            success=True,
+        ),
     )
 
     restored = WorkItem.model_validate_json(item.model_dump_json())
 
     assert restored.id == "w1"
     assert restored.status is WorkStatus.IN_PROGRESS
-    assert restored.result == {"step": "started"}
+    assert restored.result is not None
+    assert restored.result.task_id == "task-1"
     assert restored.created_at.tzinfo is not None

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Literal, Protocol, TypedDict, TypeAlias, runtime_checkable
 
-from domain.contracts import Message, MessageType, TaskResult, WorkItem, WorkStatus
+from domain.contracts import Message, MessageType, Task, TaskResult, WorkItem, WorkStatus
 
-LLMMessage: TypeAlias = dict[str, object]
+
+class LLMMessage(TypedDict):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
 EventPayload: TypeAlias = dict[str, object]
 StorageValue: TypeAlias = dict[str, object]
 EventHandler: TypeAlias = Callable[[str, EventPayload], Awaitable[None] | None]
@@ -24,6 +29,14 @@ class LLMProvider(Protocol):
         **kwargs: object,
     ) -> str:
         """Generate a response from an LLM."""
+
+
+@runtime_checkable
+class AgentPort(Protocol):
+    """Contract for execution agents managed by CTO."""
+
+    async def execute_task(self, task: Task) -> TaskResult:
+        """Execute one task and return result."""
 
 
 @runtime_checkable
@@ -66,6 +79,7 @@ class MessageQueuePort(Protocol):
         to_agent: str,
         content: str,
         message_type: MessageType = MessageType.NOTIFICATION,
+        context: dict[str, object] | None = None,
     ) -> str:
         """Send a message and return message id."""
 

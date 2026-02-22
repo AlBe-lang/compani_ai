@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from domain.contracts import Strategy, Task
+from domain.contracts import AgentRole, Strategy, Task
 
 
 def test_strategy_and_task_serialization_roundtrip() -> None:
@@ -14,7 +14,7 @@ def test_strategy_and_task_serialization_roundtrip() -> None:
         id="task-1",
         title="Build API",
         description="Create CRUD endpoints",
-        agent_role="backend",
+        agent_role=AgentRole.BACKEND,
         dependencies=[],
         priority=1,
     )
@@ -24,5 +24,5 @@ def test_strategy_and_task_serialization_roundtrip() -> None:
 
     assert restored_strategy.project_name == "Todo"
     assert restored_strategy.tech_stack == ["FastAPI", "React"]
-    assert restored_task.agent_role == "backend"
+    assert restored_task.agent_role is AgentRole.BACKEND
     assert restored_task.priority == 1

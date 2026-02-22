@@ -79,7 +79,7 @@ async def test_mock_workspace_register_and_update() -> None:
     updated = await workspace.get("w1")
     assert updated is not None
     assert updated.result is not None
-    assert updated.result["task_id"] == "t1"
+    assert updated.result.task_id == "t1"
 
 
 @pytest.mark.asyncio

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+from ._utils import utc_now
 
 
 class MessageType(str, Enum):
@@ -34,4 +32,4 @@ class Message(BaseModel):
     content: str
     context: dict[str, object] = Field(default_factory=dict)
     status: MessageStatus = MessageStatus.PENDING
-    created_at: datetime = Field(default_factory=_utc_now)
+    created_at: datetime = Field(default_factory=utc_now)

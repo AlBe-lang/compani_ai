@@ -34,7 +34,7 @@ class MockWorkSpace:
         item = self._items.get(work_item_id)
         if item is None:
             return
-        item.result = result.model_dump(mode="json")
+        item.result = result.model_copy(deep=True)
         item.updated_at = datetime.now(timezone.utc)
 
     async def detect_blocking(self, work_item_id: str) -> bool:

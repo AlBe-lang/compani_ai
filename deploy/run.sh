@@ -20,7 +20,7 @@ if ! ollama list >/dev/null 2>&1; then
 fi
 
 echo "[INFO] checking model: ${MODEL_NAME}"
-if ! ollama list | awk 'NR > 1 {print $1}' | grep -Fxq "${MODEL_NAME}"; then
+if ! ollama show "${MODEL_NAME}" >/dev/null 2>&1; then
   echo "[INFO] model not found locally. pulling ${MODEL_NAME}..."
   ollama pull "${MODEL_NAME}"
 fi
