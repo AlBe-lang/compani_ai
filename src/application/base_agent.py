@@ -27,6 +27,10 @@ DEFAULT_DEP_TIMEOUT_SEC = 300.0
 DEFAULT_DEP_POLL_SEC = 2.0
 DEFAULT_QA_TIMEOUT_SEC = 30.0
 _REQUIRED_FILE_KEYS = {"name", "path", "content", "type"}
+_RETRY_JSON_ONLY_HINT = (
+    "Return only valid JSON. Do not include markdown code fences or additional commentary."
+)
+_EXTERNAL_INTERFACE_KEYWORDS = ("api", "interface", "schema", "contract", "endpoint", "spec")
 
 
 @dataclass(frozen=True)
@@ -79,7 +83,7 @@ class BaseSLMAgent(ABC):
             agent_id=self._agent_id,
             role=role.value,
         )
-        self._system_prompt = self._load_system_prompt()
+        self._system_prompt = self._get_system_prompt()
 
     async def execute_task(self, task: Task) -> TaskResult:
         """Execute a task with dependency wait, optional Q&A, and retry parsing."""
@@ -187,7 +191,16 @@ class BaseSLMAgent(ABC):
         return context
 
     async def _check_needs_info(self, task: Task) -> bool:
-        return bool(task.dependencies) or "?" in task.description
+        if task.dependencies or "?" in task.description:
+            return True
+        return self._requires_external_interface(task.acceptance_criteria)
+
+    def _requires_external_interface(self, acceptance_criteria: list[str]) -> bool:
+        for criterion in acceptance_criteria:
+            lowered = criterion.lower()
+            if any(keyword in lowered for keyword in _EXTERNAL_INTERFACE_KEYWORDS):
+                return True
+        return False
 
     def _formulate_question(self, task: Task) -> str:
         return f"Need clarification for '{task.title}': {task.description}"
@@ -223,64 +236,83 @@ class BaseSLMAgent(ABC):
         last_error_code = ErrorCode.E_PARSE_JSON
 
         for attempt in range(1, self._config.max_retries + 1):
-            self._logger.info(
-                "slm.llm.call",
-                task_id=task.id,
-                model=self._config.model,
-                attempt=attempt,
-                timeout_sec=self._config.timeout_sec,
-            )
-            raw = await self._llm.generate(
-                model=self._config.model,
-                messages=self._build_messages(task, context),
-                temperature=self._config.temperature,
-                max_tokens=self._config.max_tokens,
-                timeout_sec=self._config.timeout_sec,
-            )
-
-            try:
-                result = self._parse_task_result(task, raw)
+            raw = await self._call_llm_once(task, context, attempt)
+            result, error_code = self._parse_result_once(task, raw, attempt)
+            if result is not None:
                 return result, len(raw)
-            except ParseResponseError as exc:
-                last_error_code = exc.code
-                self._logger.warning(
-                    "slm.task.retry",
-                    task_id=task.id,
-                    attempt=attempt,
-                    error_code=exc.code.value,
-                    preview=raw[:200],
-                )
-            except ValidationError as exc:
-                last_error_code = ErrorCode.E_PARSE_SCHEMA
-                self._logger.warning(
-                    "slm.task.retry",
-                    task_id=task.id,
-                    attempt=attempt,
-                    error_code=ErrorCode.E_PARSE_SCHEMA.value,
-                    preview=raw[:200],
-                    detail=str(exc),
-                )
-            except SLMAgentError as exc:
-                last_error_code = exc.code
-                self._logger.warning(
-                    "slm.task.retry",
-                    task_id=task.id,
-                    attempt=attempt,
-                    error_code=exc.code.value,
-                    preview=raw[:200],
-                    detail=str(exc),
-                )
-
+            last_error_code = error_code
             if attempt < self._config.max_retries:
                 await asyncio.sleep(self._delay_for_attempt(attempt - 1))
 
         raise SLMAgentError(last_error_code, "failed to parse task result from model response")
 
-    def _parse_task_result(self, task: Task, raw: str) -> TaskResult:
+    async def _call_llm_once(
+        self,
+        task: Task,
+        context: dict[str, object],
+        attempt: int,
+    ) -> str:
+        self._logger.info(
+            "slm.llm.call",
+            task_id=task.id,
+            model=self._config.model,
+            attempt=attempt,
+            timeout_sec=self._config.timeout_sec,
+        )
+        return await self._llm.generate(
+            model=self._config.model,
+            messages=self._build_prompt(task, context, attempt),
+            temperature=self._config.temperature,
+            max_tokens=self._config.max_tokens,
+            timeout_sec=self._config.timeout_sec,
+        )
+
+    def _parse_result_once(
+        self,
+        task: Task,
+        raw: str,
+        attempt: int,
+    ) -> tuple[TaskResult | None, ErrorCode]:
+        try:
+            return self._parse_response(task, raw), ErrorCode.E_PARSE_JSON
+        except ParseResponseError as exc:
+            self._log_retry(task.id, attempt, exc.code, raw)
+            return None, exc.code
+        except ValidationError as exc:
+            error_code = ErrorCode.E_PARSE_SCHEMA
+            self._log_retry(task.id, attempt, error_code, raw, detail=str(exc))
+            return None, error_code
+        except SLMAgentError as exc:
+            self._log_retry(task.id, attempt, exc.code, raw, detail=str(exc))
+            return None, exc.code
+
+    def _log_retry(
+        self,
+        task_id: str,
+        attempt: int,
+        error_code: ErrorCode,
+        raw: str,
+        *,
+        detail: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "task_id": task_id,
+            "attempt": attempt,
+            "error_code": error_code.value,
+            "preview": raw[:200],
+        }
+        if detail:
+            payload["detail"] = detail
+        self._logger.warning("slm.task.retry", **payload)
+
+    def _parse_response(self, task: Task, raw: str) -> TaskResult:
         payload = parse_json_response(raw)
         self._validate_files(payload)
         normalized = self._normalize_payload(task, payload)
         return TaskResult.model_validate(normalized)
+
+    def _parse_task_result(self, task: Task, raw: str) -> TaskResult:
+        return self._parse_response(task, raw)
 
     def _validate_files(self, payload: dict[str, object]) -> None:
         raw_files = payload.get("files")
@@ -319,15 +351,26 @@ class BaseSLMAgent(ABC):
 
         return normalized
 
-    def _build_messages(self, task: Task, context: dict[str, object]) -> list[LLMMessage]:
+    def _build_prompt(
+        self,
+        task: Task,
+        context: dict[str, object],
+        attempt: int = 1,
+    ) -> list[LLMMessage]:
         user_payload = {
             "task": task.model_dump(mode="json"),
             "context": context,
         }
+        user_content = json.dumps(user_payload, ensure_ascii=False)
+        if attempt >= 2:
+            user_content = f"{_RETRY_JSON_ONLY_HINT}\n\n{user_content}"
         return [
             {"role": "system", "content": self._system_prompt},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ]
+
+    def _build_messages(self, task: Task, context: dict[str, object]) -> list[LLMMessage]:
+        return self._build_prompt(task, context)
 
     def _new_work_item(self, task: Task) -> WorkItem:
         return WorkItem(
@@ -371,10 +414,13 @@ class BaseSLMAgent(ABC):
         bounded_index = min(index, len(self._config.retry_delays) - 1)
         return self._config.retry_delays[bounded_index]
 
-    def _load_system_prompt(self) -> str:
+    def _get_system_prompt(self) -> str:
         if self._prompt_path and self._prompt_path.exists():
             return self._prompt_path.read_text(encoding="utf-8")
         return self._fallback_system_prompt()
+
+    def _load_system_prompt(self) -> str:
+        return self._get_system_prompt()
 
     @abstractmethod
     def _fallback_system_prompt(self) -> str:

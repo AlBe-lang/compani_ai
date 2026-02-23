@@ -29,5 +29,6 @@ class Task(BaseModel):
     title: str
     description: str
     agent_role: AgentRole
+    acceptance_criteria: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     priority: int = Field(default=3, ge=1, le=5)

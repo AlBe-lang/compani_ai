@@ -49,12 +49,18 @@ class TimeoutAskQueue(MockMessageQueue):
         raise asyncio.TimeoutError
 
 
-def _backend_task(*, dependencies: list[str] | None = None, description: str = "Build API") -> Task:
+def _backend_task(
+    *,
+    dependencies: list[str] | None = None,
+    description: str = "Build API",
+    acceptance_criteria: list[str] | None = None,
+) -> Task:
     return Task(
         id="backend-crud",
         title="Create CRUD API",
         description=description,
         agent_role=AgentRole.BACKEND,
+        acceptance_criteria=acceptance_criteria or [],
         dependencies=dependencies or [],
         priority=1,
     )
@@ -224,6 +230,34 @@ async def test_backend_stage1_retries_when_file_shape_invalid_then_succeeds() ->
     assert result.success is True
     assert result.files[0].path == "backend/main.py"
     assert len(llm.calls) == 2
+    second_messages = llm.calls[1]["messages"]
+    assert isinstance(second_messages, list)
+    second_user_content = second_messages[1]["content"]
+    assert isinstance(second_user_content, str)
+    assert "Return only valid JSON." in second_user_content
+
+
+@pytest.mark.asyncio
+async def test_backend_stage1_acceptance_criteria_can_trigger_qa() -> None:
+    llm = MockLLMProvider(response=_stage1_response())
+    workspace = TrackingWorkSpace()
+    queue = TimeoutAskQueue()
+    agent = BackendSLMAgent(
+        llm=llm,
+        workspace=workspace,
+        queue=queue,
+        run_id="run_backend_acceptance_qa",
+        config=BackendSLMConfig(retry_delays=(0.0,)),
+    )
+    task = _backend_task(
+        description="Implement request validation",
+        acceptance_criteria=["External API schema must match partner interface contract."],
+    )
+
+    result = await agent.execute_task(task)
+
+    assert queue.ask_calls == 1
+    assert result.success is True
 
 
 @pytest.mark.asyncio
