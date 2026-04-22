@@ -9,7 +9,7 @@ from observability.logger import configure_logging, get_logger
 
 
 def _capture_payload(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
-    payload = json.loads(capsys.readouterr().out.strip())
+    payload = json.loads(capsys.readouterr().err.strip())
     assert isinstance(payload, dict)
 
     normalized: dict[str, object] = {}

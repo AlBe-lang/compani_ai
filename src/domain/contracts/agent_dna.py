@@ -13,3 +13,5 @@ class AgentDNA(BaseModel):
     expertise: list[str] = Field(default_factory=list)
     success_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     avg_duration: float = Field(default=0.0, ge=0.0)
+    # BREAKING CHANGE: total_tasks added for correct rolling-average DNA evolution
+    total_tasks: int = Field(default=0, ge=0)

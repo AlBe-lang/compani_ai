@@ -28,7 +28,7 @@ def test_logger_prints_json_with_run_id(capsys: pytest.CaptureFixture[str]) -> N
     run_id = generate_run_id()
     logger = get_logger(component="stage1", run_id=run_id)
     logger.info("smoke_log")
-    captured = capsys.readouterr().out.strip()
+    captured = capsys.readouterr().err.strip()
     payload = json.loads(captured)
     assert payload["event"] == "smoke_log"
     assert payload["run_id"] == run_id

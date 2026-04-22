@@ -47,7 +47,10 @@ class WorkSpacePort(Protocol):
         """Register a new work item and return its id."""
 
     async def get(self, work_item_id: str) -> WorkItem | None:
-        """Get a work item by id."""
+        """Get a work item by work_item_id."""
+
+    async def get_by_task_id(self, task_id: str) -> WorkItem | None:
+        """Get a work item by the task_id it was created for."""
 
     async def set_status(self, work_item_id: str, status: WorkStatus) -> None:
         """Update status of a work item."""

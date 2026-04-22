@@ -17,6 +17,24 @@ except ModuleNotFoundError:  # pragma: no cover - environment dependent
 _CONFIGURED = False
 
 
+class _DynamicStderr:
+    """Write to sys.stderr at call time (not at configure time).
+
+    Structlog's PrintLoggerFactory stores a file reference once. Using a proxy
+    ensures tests that redirect sys.stderr (e.g. pytest capsys) are handled
+    correctly without I/O-on-closed-file errors.
+    """
+
+    def write(self, s: str) -> int:
+        return sys.stderr.write(s)
+
+    def flush(self) -> None:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
 class _FallbackLogger:
     """Minimal JSON logger used when structlog is unavailable."""
 
@@ -36,7 +54,7 @@ class _FallbackLogger:
             **self._context,
             **kwargs,
         }
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        sys.stderr.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
     def debug(self, event: str, **kwargs: Any) -> None:
         self._emit("debug", event, **kwargs)
@@ -64,7 +82,8 @@ def configure_logging(force: bool = False) -> None:
                 structlog.processors.add_log_level,
                 structlog.processors.JSONRenderer(),
             ],
-            logger_factory=structlog.PrintLoggerFactory(),
+            # stderr keeps logs separate from Rich Live's stdout display
+            logger_factory=structlog.PrintLoggerFactory(file=_DynamicStderr()),
             cache_logger_on_first_use=False,
         )
     _CONFIGURED = True

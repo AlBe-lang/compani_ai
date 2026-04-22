@@ -147,7 +147,7 @@ async def test_create_strategy_logs_include_run_id_and_agent_id(
 
     await agent.create_strategy("Todo app")
 
-    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.strip()]
     payloads = [json.loads(line) for line in lines]
 
     assert any(payload.get("run_id") == run_id for payload in payloads)

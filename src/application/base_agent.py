@@ -165,7 +165,7 @@ class BaseSLMAgent(ABC):
                 if loop.time() > deadline:
                     raise SLMAgentError(ErrorCode.E_DEPS_TIMEOUT, f"dependency timeout: {dep_id}")
 
-                dep_item = await self._workspace.get(dep_id)
+                dep_item = await self._workspace.get_by_task_id(dep_id)
                 if dep_item is None:
                     raise SLMAgentError(
                         ErrorCode.E_DEPS_BLOCKED,

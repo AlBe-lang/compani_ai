@@ -112,7 +112,7 @@ async def test_backend_stage1_execute_success_waiting_to_in_progress() -> None:
             dep_poll_sec=0.001,
         ),
     )
-    task = _backend_task(dependencies=[dependency_id])
+    task = _backend_task(dependencies=["dep-task"])
 
     async def release_dependency() -> None:
         await asyncio.sleep(0.005)
@@ -166,7 +166,7 @@ async def test_backend_stage1_dependency_timeout_raises_error() -> None:
             dep_poll_sec=0.001,
         ),
     )
-    task = _backend_task(dependencies=[dependency_id])
+    task = _backend_task(dependencies=["dep-timeout"])
 
     with pytest.raises(SLMAgentError) as exc_info:
         await agent.execute_task(task)
@@ -285,11 +285,11 @@ async def test_backend_stage1_emits_required_execution_logs(
         config=BackendSLMConfig(retry_delays=(0.0,)),
     )
 
-    await agent.execute_task(_backend_task(dependencies=[dependency_id]))
+    await agent.execute_task(_backend_task(dependencies=["dep-done"]))
 
     payloads = [
         json.loads(line)
-        for line in capsys.readouterr().out.splitlines()
+        for line in capsys.readouterr().err.splitlines()
         if line.strip()
     ]
     events = {payload.get("event") for payload in payloads}
