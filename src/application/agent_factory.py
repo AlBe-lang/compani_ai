@@ -6,12 +6,16 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from application.backend_agent import BackendSLMAgent, BackendSLMConfig
 from application.cto_agent import CTOAgent, CTOConfig
 from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from domain.ports import AgentPort, LLMProvider, MessageQueuePort, WorkSpacePort
+
+if TYPE_CHECKING:
+    from application.dna_manager import DNAManager
 
 _DEFAULT_CTO_MODEL = "llama3.1:8b"
 _DEFAULT_SLM_MODEL = "gemma4:e4b"
@@ -29,6 +33,9 @@ class SystemConfig:
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     db_path: str = "data/compani.db"
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    # Stage Gate 통과 기준 (Part 6 Stage 3)
+    gate_max_failure_rate: float = 0.3
+    gate_max_avg_duration: float = 120.0
 
 
 class AgentFactory:
@@ -40,11 +47,13 @@ class AgentFactory:
         llm: LLMProvider,
         workspace: WorkSpacePort,
         queue: MessageQueuePort,
+        dna_manager: "DNAManager | None" = None,
     ) -> None:
         self._config = config
         self._llm = llm
         self._workspace = workspace
         self._queue = queue
+        self._dna_manager = dna_manager
 
     def create_cto(self, team: Mapping[str, AgentPort] | None = None) -> CTOAgent:
         return CTOAgent(
@@ -62,6 +71,7 @@ class AgentFactory:
             queue=self._queue,
             run_id=self._config.run_id,
             config=BackendSLMConfig(model=self._config.slm_model),
+            dna_manager=self._dna_manager,
         )
 
     def create_frontend(self) -> FrontendSLMAgent:
@@ -71,6 +81,7 @@ class AgentFactory:
             queue=self._queue,
             run_id=self._config.run_id,
             config=FrontendSLMConfig(model=self._config.slm_model),
+            dna_manager=self._dna_manager,
         )
 
     def create_mlops(self) -> MLOpsSLMAgent:
@@ -80,6 +91,7 @@ class AgentFactory:
             queue=self._queue,
             run_id=self._config.run_id,
             config=MLOpsSLMConfig(model=self._config.mlops_model),
+            dna_manager=self._dna_manager,
         )
 
     def create_team(self) -> dict[str, AgentPort]:

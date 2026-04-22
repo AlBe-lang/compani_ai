@@ -91,9 +91,11 @@ class MetricsCollector:
         )
 
     async def flush(self, storage: StoragePort) -> None:
-        """Persist unflushed metrics to storage (idempotent — uses task_id + run_id as key)."""
+        """Persist unflushed metrics to storage (upsert — duplicate flush is safe)."""
+        flushed = 0
         for metric in self._metrics:
             key = f"metric_{metric.run_id}_{metric.task_id}"
+            # save() uses INSERT OR REPLACE — idempotent on duplicate keys
             await storage.save(key, {
                 "run_id": metric.run_id,
                 "task_id": metric.task_id,
@@ -104,4 +106,7 @@ class MetricsCollector:
                 "trace_id": metric.trace_id,
                 "recorded_at": metric.recorded_at,
             })
-        log.info("metrics.flushed", count=len(self._metrics))
+            flushed += 1
+        log.info("metrics.flushed", count=flushed)
+        # Clear after successful flush so duplicate calls don't re-persist
+        self._metrics.clear()

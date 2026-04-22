@@ -12,6 +12,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from domain.contracts import (
+    Message,
+    MessageType,
     ReviewDecision,
     ReviewResult,
     Strategy,
@@ -20,7 +22,7 @@ from domain.contracts import (
     WorkItem,
     WorkStatus,
 )
-from domain.ports import AgentPort, LLMMessage, LLMProvider, WorkSpacePort
+from domain.ports import AgentPort, LLMMessage, LLMProvider, MessageQueuePort, WorkSpacePort
 from observability.error_codes import ErrorCode
 from observability.logger import get_logger
 from observability.parsers import ParseResponseError, parse_json_response
@@ -36,6 +38,7 @@ DEFAULT_RETRY_DELAYS = (2.0, 4.0, 8.0)
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "cto" / "strategy.txt"
 _DECOMPOSE_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "cto" / "decompose.txt"
 _REVIEW_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "cto" / "review.txt"
+_QA_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "cto" / "qa_response.txt"
 
 
 class _ReviewSignal(BaseModel):
@@ -89,6 +92,7 @@ class CTOAgent:
         self._strategy_prompt = self._load_strategy_prompt()
         self._decompose_prompt = self._load_decompose_prompt()
         self._review_prompt = self._load_review_prompt()
+        self._qa_prompt = self._load_qa_prompt()
         self._last_strategy: Strategy | None = None
 
     async def create_strategy(self, project_request: str) -> Strategy:
@@ -402,6 +406,83 @@ class CTOAgent:
     def _response_chars(self, text: str) -> int:
         return len(text)
 
+    # ------------------------------------------------------------------
+    # Q&A background handler
+    # ------------------------------------------------------------------
+
+    async def handle_questions(self, queue: MessageQueuePort) -> None:
+        """Background loop: receive agent questions and respond via LLM.
+
+        Runs concurrently with agent execution (asyncio.create_task).
+        Exits cleanly on CancelledError when all agents finish.
+        """
+        self._logger.info("cto.qa_loop.start")
+        try:
+            while True:
+                msg = await queue.receive("cto", timeout_sec=1.0)
+                if msg is None:
+                    await asyncio.sleep(0.05)
+                    continue
+                if msg.type is MessageType.QUESTION:
+                    await self._handle_one_question(queue, msg)
+        except asyncio.CancelledError:
+            self._logger.info("cto.qa_loop.stopped")
+            raise
+
+    async def _handle_one_question(
+        self, queue: MessageQueuePort, msg: Message
+    ) -> None:
+        """Generate an LLM answer and route it back to the asking agent."""
+        self._logger.info(
+            "cto.qa.received",
+            from_agent=msg.from_agent,
+            question_len=len(msg.content),
+        )
+        try:
+            answer = await self._generate_qa_answer(msg)
+            await queue.send(
+                from_agent="cto",
+                to_agent=msg.from_agent,
+                content=answer,
+                message_type=MessageType.ANSWER,
+                context={"question_id": msg.id},
+            )
+            self._logger.info(
+                "cto.qa.answered",
+                from_agent=msg.from_agent,
+                answer_len=len(answer),
+            )
+        except Exception as exc:
+            # Do not crash the loop — log and continue
+            self._logger.warning(
+                "cto.qa.error",
+                from_agent=msg.from_agent,
+                detail=str(exc),
+            )
+
+    async def _generate_qa_answer(self, msg: Message) -> str:
+        """Call LLM to produce a concise answer to an agent's question."""
+        messages = self._build_qa_messages(msg)
+        raw = await self._llm.generate(
+            model=self._config.model,
+            messages=messages,
+            temperature=self._config.temperature,
+            max_tokens=512,
+            timeout_sec=30,
+        )
+        return raw.strip()
+
+    def _build_qa_messages(self, msg: Message) -> list[LLMMessage]:
+        context_str = ""
+        if msg.context:
+            import json as _json
+            context_str = f"\n\nContext provided by agent:\n{_json.dumps(msg.context, indent=2)}"
+        user_content = f"Question from {msg.from_agent}:\n{msg.content}{context_str}"
+        return [
+            {"role": "system", "content": self._qa_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
     def _load_strategy_prompt(self) -> str:
         if _PROMPT_PATH.exists():
             return _PROMPT_PATH.read_text(encoding="utf-8")
@@ -424,4 +505,12 @@ class CTOAgent:
         return (
             "Review work items and return JSON with decision and reason. "
             "decision must be continue, replan, or abort."
+        )
+
+    def _load_qa_prompt(self) -> str:
+        if _QA_PROMPT_PATH.exists():
+            return _QA_PROMPT_PATH.read_text(encoding="utf-8")
+        return (
+            "You are the CTO. Answer the agent's question concisely and technically. "
+            "Focus on what the agent needs to complete its task."
         )

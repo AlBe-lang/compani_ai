@@ -74,6 +74,12 @@ class SharedWorkspace:
             "work_item.updated",
             {"item_id": work_item_id, "prev_status": prev, "curr_status": status},
         )
+        # Dedicated event so StageGateMeeting subscribes without filtering all updates.
+        if status is WorkStatus.BLOCKED:
+            await self._event_bus.publish(
+                "blocking.detected",
+                {"item_id": work_item_id, "agent_id": item.agent_id},
+            )
 
     async def attach_result(self, work_item_id: str, result: TaskResult) -> None:
         item = await self.get(work_item_id)

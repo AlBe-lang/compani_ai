@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from domain.contracts import AgentRole
 from domain.ports import LLMProvider, MessageQueuePort, WorkSpacePort
 from observability.error_codes import ErrorCode
 
 from .base_agent import BaseSLMAgent, SLMAgentError, SLMConfig
+
+if TYPE_CHECKING:
+    from application.dna_manager import DNAManager
 
 DEFAULT_FRONTEND_MODEL = "phi3.5"
 DEFAULT_FRONTEND_TEMPERATURE = 0.2
@@ -46,6 +51,7 @@ class FrontendSLMAgent(BaseSLMAgent):
         queue: MessageQueuePort,
         run_id: str,
         config: FrontendSLMConfig | None = None,
+        dna_manager: "DNAManager | None" = None,
     ) -> None:
         resolved_config = config or FrontendSLMConfig()
         prompt_path = self._prompt_path_for_stage(resolved_config.stage)
@@ -58,6 +64,7 @@ class FrontendSLMAgent(BaseSLMAgent):
             run_id=run_id,
             agent_id="frontend",
             prompt_path=prompt_path,
+            dna_manager=dna_manager,
         )
         self._stage = resolved_config.stage
 

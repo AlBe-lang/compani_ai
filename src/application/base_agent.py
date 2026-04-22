@@ -11,11 +11,16 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from domain.contracts import AgentRole, Task, TaskResult, WorkItem, WorkStatus
+from domain.contracts import AgentDNA, AgentRole, Task, TaskResult, WorkItem, WorkStatus
 from domain.ports import LLMMessage, LLMProvider, MessageQueuePort, WorkSpacePort
 from observability.error_codes import ErrorCode
 from observability.logger import get_logger
 from observability.parsers import ParseResponseError, parse_json_response
+
+# DNAManager는 TYPE_CHECKING 시점에만 임포트 (순환 참조 방지)
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from application.dna_manager import DNAManager
 
 DEFAULT_MODEL = "phi3.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -70,6 +75,7 @@ class BaseSLMAgent(ABC):
         *,
         agent_id: str | None = None,
         prompt_path: Path | None = None,
+        dna_manager: "DNAManager | None" = None,
     ) -> None:
         self._role = role
         self._llm = llm
@@ -79,16 +85,28 @@ class BaseSLMAgent(ABC):
         self._run_id = run_id
         self._agent_id = agent_id or role.value
         self._prompt_path = prompt_path
+        self._dna_manager = dna_manager
         self._logger = get_logger(component=f"{role.value}_agent", run_id=run_id).bind(
             agent_id=self._agent_id,
             role=role.value,
         )
         self._system_prompt = self._get_system_prompt()
+        # DNA 수치로 결정된 현재 실행에서 사용할 temperature (None이면 config 기본값 사용)
+        self._dna_temperature: float | None = None
 
     async def execute_task(self, task: Task) -> TaskResult:
         """Execute a task with dependency wait, optional Q&A, and retry parsing."""
         self._validate_task_role(task)
         work_item_id: str | None = None
+        import time as _time
+        t_start = _time.monotonic()
+
+        # DNA 로드 → temperature + 시스템 프롬프트 modifier 적용
+        dna: AgentDNA | None = None
+        if self._dna_manager is not None:
+            dna = await self._dna_manager.load(self._agent_id, self._role.value)
+            self._apply_dna(dna)
+
         self._logger.info(
             "slm.task.start",
             task_id=task.id,
@@ -102,6 +120,12 @@ class BaseSLMAgent(ABC):
             result, response_chars = await self._generate_result_with_retry(task, context)
             await self._workspace.set_status(work_item_id, WorkStatus.DONE)
             await self._workspace.attach_result(work_item_id, result)
+
+            # DNA 갱신 — 성공 결과 반영
+            if self._dna_manager is not None and dna is not None:
+                duration = _time.monotonic() - t_start
+                await self._dna_manager.update(dna, result, duration_sec=duration)
+
             self._logger.info(
                 "slm.task.done",
                 task_id=task.id,
@@ -113,6 +137,13 @@ class BaseSLMAgent(ABC):
             return result
         except SLMAgentError as exc:
             await self._mark_failed(work_item_id, task, exc.code)
+            if self._dna_manager is not None and dna is not None:
+                duration = _time.monotonic() - t_start
+                failure_result = TaskResult(
+                    task_id=task.id, agent_id=self._agent_id,
+                    approach="failed", code="", success=False, error_code=exc.code,
+                )
+                await self._dna_manager.update(dna, failure_result, duration_sec=duration)
             self._logger.error(
                 "slm.task.failed",
                 task_id=task.id,
@@ -246,23 +277,41 @@ class BaseSLMAgent(ABC):
 
         raise SLMAgentError(last_error_code, "failed to parse task result from model response")
 
+    def _apply_dna(self, dna: AgentDNA) -> None:
+        """DNA 수치를 현재 실행 파라미터에 반영한다."""
+        assert self._dna_manager is not None
+        # temperature 오버라이드
+        params = self._dna_manager.to_generation_params(dna, self._config.temperature)
+        self._dna_temperature = params.get("temperature")
+        # 시스템 프롬프트 modifier prepend
+        modifier = self._dna_manager.to_system_prompt_modifier(dna)
+        if modifier:
+            base = self._get_system_prompt()
+            self._system_prompt = modifier + base
+
     async def _call_llm_once(
         self,
         task: Task,
         context: dict[str, object],
         attempt: int,
     ) -> str:
+        temperature = (
+            self._dna_temperature
+            if self._dna_temperature is not None
+            else self._config.temperature
+        )
         self._logger.info(
             "slm.llm.call",
             task_id=task.id,
             model=self._config.model,
             attempt=attempt,
             timeout_sec=self._config.timeout_sec,
+            temperature=temperature,
         )
         return await self._llm.generate(
             model=self._config.model,
             messages=self._build_prompt(task, context, attempt),
-            temperature=self._config.temperature,
+            temperature=temperature,
             max_tokens=self._config.max_tokens,
             timeout_sec=self._config.timeout_sec,
         )

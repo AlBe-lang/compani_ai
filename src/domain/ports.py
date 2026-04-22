@@ -112,6 +112,36 @@ class StoragePort(Protocol):
 
 
 @runtime_checkable
+class KnowledgeGraphPort(Protocol):
+    """Contract for agent expertise tracking and Q&A routing via vector DB."""
+
+    async def store_interaction(
+        self,
+        agent_id: str,
+        role: str,
+        question: str,
+        answer: str,
+        success: bool,
+        project_id: str,
+        run_id: str,
+    ) -> None:
+        """Store a Q&A interaction and update expertise EMA for the agent role."""
+
+    async def store_task_result(self, result: "TaskResult", run_id: str) -> None:
+        """Store a task result vector for future routing context."""
+
+    async def find_best_responder(
+        self,
+        question: str,
+        context: dict[str, object] | None = None,
+    ) -> str | None:
+        """Return agent role best suited to answer question, or None if unknown."""
+
+    async def get_expertise_level(self, role: str, topic: str) -> float:
+        """Return EMA expertise level [0.0, 1.0] for a role on a topic."""
+
+
+@runtime_checkable
 class EventBusPort(Protocol):
     """Contract for event publish/subscribe."""
 
