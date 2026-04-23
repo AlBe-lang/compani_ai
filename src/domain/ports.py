@@ -35,8 +35,20 @@ class LLMProvider(Protocol):
 class AgentPort(Protocol):
     """Contract for execution agents managed by CTO."""
 
-    async def execute_task(self, task: Task) -> TaskResult:
-        """Execute one task and return result."""
+    async def execute_task(
+        self,
+        task: Task,
+        *,
+        context: dict[str, object] | None = None,
+    ) -> TaskResult:
+        """Execute one task and return result.
+
+        Part 7 Stage 3 added optional ``context`` — a free-form dict that
+        upstream components (e.g. ReworkScheduler) can use to pass
+        execution-time metadata such as ``review_feedback`` or a preexisting
+        ``work_item_id`` for rework paths. Implementers should tolerate
+        ``None`` and unknown keys gracefully.
+        """
 
 
 @runtime_checkable
@@ -55,8 +67,30 @@ class WorkSpacePort(Protocol):
     async def set_status(self, work_item_id: str, status: WorkStatus) -> None:
         """Update status of a work item."""
 
-    async def attach_result(self, work_item_id: str, result: TaskResult) -> None:
-        """Attach execution result to a work item."""
+    async def attach_result(
+        self,
+        work_item_id: str,
+        result: TaskResult,
+        *,
+        task_dependencies: list[str] | None = None,
+        task_description: str = "",
+    ) -> None:
+        """Attach execution result to a work item.
+
+        Part 7 Stage 3 added keyword-only ``task_dependencies`` and
+        ``task_description`` — flow into the ``task.completed`` event payload
+        for COI-aware peer reviewer selection. Both have safe defaults so
+        legacy callers remain compatible.
+        """
+
+    async def reopen(self, work_item_id: str, reason: str) -> "WorkItem | None":
+        """Part 7 Stage 3 — transition DONE WorkItem back to IN_PROGRESS.
+
+        Used by ReworkScheduler to re-execute a Task after a peer review
+        flagged pending_rework. Implementations should increment the
+        WorkItem.rework_count. May return None or raise if the transition is
+        invalid (non-DONE item).
+        """
 
     async def detect_blocking(self, work_item_id: str) -> bool:
         """Return whether the work item is blocked."""

@@ -81,7 +81,22 @@ class SharedWorkspace:
                 {"item_id": work_item_id, "agent_id": item.agent_id},
             )
 
-    async def attach_result(self, work_item_id: str, result: TaskResult) -> None:
+    async def attach_result(
+        self,
+        work_item_id: str,
+        result: TaskResult,
+        *,
+        task_dependencies: list[str] | None = None,
+        task_description: str = "",
+    ) -> None:
+        """Attach result to a WorkItem and emit ``task.completed`` on DONE.
+
+        Part 7 Stage 3 added optional ``task_dependencies`` and
+        ``task_description`` — included in the event payload so peer-review
+        coordinators can perform COI (conflict-of-interest) reviewer filtering
+        based on direct-dependency task ids. Both parameters default to empty
+        for backward compatibility with Stage 1/2 callers.
+        """
         item = await self.get(work_item_id)
         if item is None:
             raise AdapterError(ErrorCode.E_STORAGE_READ, f"WorkItem not found: {work_item_id}")
@@ -101,8 +116,53 @@ class SharedWorkspace:
                     "task_id": item.task_id,
                     "agent_id": item.agent_id,
                     "result": result.model_dump(mode="json"),
+                    "task_dependencies": list(task_dependencies or []),
+                    "task_description": task_description,
+                    "rework_count": item.rework_count,
                 },
             )
+
+    async def reopen(self, work_item_id: str, reason: str) -> WorkItem:
+        """Part 7 Stage 3 — transition DONE WorkItem back to IN_PROGRESS for rework.
+
+        Intentionally bypasses the standard ``_ALLOWED_TRANSITIONS`` matrix —
+        rework is a controlled re-execution path triggered by peer-review
+        ``pending_rework=True`` verdicts. Increments ``rework_count`` and emits
+        ``work_item.reopened`` for observability / scheduler coordination.
+
+        Raises AdapterError if the item is not currently DONE. Callers (Rework
+        scheduler) must enforce ``rework_max_attempts`` before invoking.
+        """
+        item = await self.get(work_item_id)
+        if item is None:
+            raise AdapterError(ErrorCode.E_STORAGE_READ, f"WorkItem not found: {work_item_id}")
+        if item.status is not WorkStatus.DONE:
+            raise AdapterError(
+                ErrorCode.E_DEPS_BLOCKED,
+                f"reopen requires DONE status, got {item.status}",
+            )
+        item.status = WorkStatus.IN_PROGRESS
+        item.rework_count += 1
+        item.updated_at = datetime.now(timezone.utc)
+        self._cache[work_item_id] = item
+        await self._storage.update(work_item_id, item.model_dump(mode="json"))
+        log.info(
+            "ws.item.reopened",
+            item_id=work_item_id,
+            rework_count=item.rework_count,
+            reason=reason,
+        )
+        await self._event_bus.publish(
+            "work_item.reopened",
+            {
+                "item_id": work_item_id,
+                "task_id": item.task_id,
+                "agent_id": item.agent_id,
+                "reason": reason,
+                "rework_count": item.rework_count,
+            },
+        )
+        return item
 
     async def get_by_task_id(self, task_id: str) -> WorkItem | None:
         work_item_id = self._task_index.get(task_id)

@@ -14,6 +14,12 @@ from application.emergency_meeting import EmergencyMeeting, EmergencyMeetingConf
 from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from application.peer_review import PeerReviewConfig, PeerReviewCoordinator, PeerReviewMode
+from application.reviewer_selector import (
+    DNAAwareSelector,
+    FixedWithKGFallbackSelector,
+    ReviewerSelector,
+)
+from application.rework_scheduler import ReworkConfig, ReworkScheduler
 from domain.ports import (
     AgentPort,
     EventBusPort,
@@ -57,6 +63,12 @@ class SystemConfig:
     # 토글 예정). CRITICAL은 의존성 보유 또는 duration ≥ 임계값 Task만 리뷰.
     peer_review_mode: PeerReviewMode = PeerReviewMode.OFF
     peer_review_critical_duration_sec: float = 60.0
+    # Part 7 Stage 3 — 자동 리뷰어 선정 + rework. 기본 off: Stage 2와 동일한
+    # backward-compat 동작을 유지. DNA_AWARE 선택 시 DNAAwareSelector가 주입되며
+    # COI 필터로 후보가 0이면 FixedWithKGFallbackSelector로 자동 폴백.
+    reviewer_selector_mode: str = "fixed"  # "fixed" | "dna_aware"
+    rework_enabled: bool = False
+    rework_max_attempts: int = 2
 
 
 class AgentFactory:
@@ -157,13 +169,18 @@ class AgentFactory:
         qdrant: "QdrantStorage | None" = None,
         metrics: "MetricsCollector | None" = None,
     ) -> PeerReviewCoordinator:
-        """Part 7 Stage 2 — wire PeerReviewCoordinator. Subscribes to
-        ``task.completed`` on the given event_bus when mode != OFF.
+        """Part 7 Stage 2-3 — wire PeerReviewCoordinator.
 
-        Reviewer models are mapped per role from SystemConfig's existing model
-        slots: backend/frontend use slm_model, mlops uses mlops_model, cto uses
-        cto_model (cto is rarely picked as reviewer but kept for completeness).
+        Subscribes to ``task.completed`` on the given event_bus when mode != OFF.
+        Reviewer model mapping uses SystemConfig's existing slots (backend/frontend
+        → slm_model, mlops → mlops_model, cto → cto_model). Stage 3 selects
+        ``DNAAwareSelector`` when ``reviewer_selector_mode == "dna_aware"`` and
+        a DNAManager is available; falls back to ``FixedWithKGFallbackSelector``.
         """
+        primary_selector: ReviewerSelector | None = self._build_reviewer_selector(
+            knowledge_graph=knowledge_graph
+        )
+        fallback_selector = FixedWithKGFallbackSelector(knowledge_graph=knowledge_graph)
         return PeerReviewCoordinator(
             workspace=self._workspace,
             storage=storage,
@@ -180,8 +197,45 @@ class AgentFactory:
                 mode=self._config.peer_review_mode,
                 critical_duration_sec=self._config.peer_review_critical_duration_sec,
             ),
+            selector=primary_selector,
+            fallback_selector=fallback_selector,
             knowledge_graph=knowledge_graph,
             dna_manager=self._dna_manager,
             qdrant=qdrant,
+            metrics=metrics,
+        )
+
+    def _build_reviewer_selector(
+        self, *, knowledge_graph: KnowledgeGraphPort | None
+    ) -> ReviewerSelector:
+        """Part 7 Stage 3 — pick primary selector based on SystemConfig."""
+        mode = (self._config.reviewer_selector_mode or "fixed").lower()
+        if mode == "dna_aware" and self._dna_manager is not None:
+            return DNAAwareSelector(dna_manager=self._dna_manager)
+        return FixedWithKGFallbackSelector(knowledge_graph=knowledge_graph)
+
+    def create_rework_scheduler(
+        self,
+        *,
+        storage: StoragePort,
+        event_bus: EventBusPort,
+        agents: Mapping[str, AgentPort],
+        metrics: "MetricsCollector | None" = None,
+    ) -> ReworkScheduler:
+        """Part 7 Stage 3 — wire ReworkScheduler.
+
+        Subscribes to ``review.rework_requested`` when ``rework_enabled=True``.
+        ``agents`` is the same role→AgentPort map as ``create_team()`` returns.
+        """
+        return ReworkScheduler(
+            workspace=self._workspace,
+            storage=storage,
+            event_bus=event_bus,
+            agents=agents,
+            run_id=self._config.run_id,
+            config=ReworkConfig(
+                enabled=self._config.rework_enabled,
+                max_attempts=self._config.rework_max_attempts,
+            ),
             metrics=metrics,
         )

@@ -30,7 +30,11 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from application.reviewer_selector import FixedWithKGFallbackSelector, ReviewerSelector
+from application.reviewer_selector import (
+    DNAAwareSelector,
+    FixedWithKGFallbackSelector,
+    ReviewerSelector,
+)
 from domain.contracts import (
     PeerReviewDecision,
     PeerReviewRequest,
@@ -104,6 +108,7 @@ class PeerReviewCoordinator:
         run_id: str,
         config: PeerReviewConfig | None = None,
         selector: ReviewerSelector | None = None,
+        fallback_selector: ReviewerSelector | None = None,
         knowledge_graph: "KnowledgeGraphPort | None" = None,
         dna_manager: "DNAManager | None" = None,
         qdrant: "QdrantStorage | None" = None,
@@ -119,11 +124,24 @@ class PeerReviewCoordinator:
         self._selector: ReviewerSelector = selector or FixedWithKGFallbackSelector(
             knowledge_graph=knowledge_graph
         )
+        # Part 7 Stage 3: when primary selector returns None (e.g. DNAAwareSelector
+        # filters out all candidates via COI), cascade to this fallback so the
+        # pipeline never stalls. Default FixedWithKGFallbackSelector matches the
+        # behaviour before Stage 3 so users who don't opt into DNA-aware mode see
+        # no change.
+        self._fallback_selector: ReviewerSelector = fallback_selector or (
+            self._selector
+            if isinstance(self._selector, FixedWithKGFallbackSelector)
+            else FixedWithKGFallbackSelector(knowledge_graph=knowledge_graph)
+        )
         self._dna_manager = dna_manager
         self._qdrant = qdrant
         self._metrics = metrics
         self._logger = get_logger(component="peer_review", run_id=run_id)
         self._prompt_template = self._load_prompt()
+        # Part 7 Stage 3: per-run tracking of author roles seen → feeds the
+        # ``transitive_roles`` portion of COI context for DNAAwareSelector.
+        self._in_run_roles: set[str] = set()
 
         if self._config.mode is not PeerReviewMode.OFF:
             event_bus.subscribe("task.completed", self._on_task_completed)
@@ -144,14 +162,32 @@ class PeerReviewCoordinator:
             return None
 
         author_role = self._role_from_agent_id(str(payload.get("agent_id", "")))
+        # Track this author_role before building COI so the current task's role
+        # doesn't appear as a "transitive ancestor" for itself.
+        self._in_run_roles.add(author_role)
+
         result_snapshot = self._extract_result_snapshot(payload)
-        reviewer_role = await self._selector.select(
-            author_role=author_role,
-            context={
-                "approach": result_snapshot.get("approach", ""),
-                "description": result_snapshot.get("approach", ""),
-            },
-        )
+        dep_source_roles = await self._resolve_dep_source_roles(payload)
+        transitive_roles = self._in_run_roles - {author_role} - dep_source_roles
+
+        context: dict[str, object] = {
+            "approach": result_snapshot.get("approach", ""),
+            "description": result_snapshot.get("approach", ""),
+            "dep_source_roles": sorted(dep_source_roles),
+            "transitive_roles": sorted(transitive_roles),
+        }
+        reviewer_role = await self._selector.select(author_role=author_role, context=context)
+        # Stage 3: cascade to fallback selector so the pipeline never stalls
+        # when the primary (e.g. DNAAwareSelector) excludes every candidate.
+        if reviewer_role is None and self._fallback_selector is not self._selector:
+            self._logger.info(
+                "review.selector_fallback",
+                author_role=author_role,
+                task_id=payload.get("task_id"),
+            )
+            reviewer_role = await self._fallback_selector.select(
+                author_role=author_role, context=context
+            )
         if reviewer_role is None:
             self._logger.warning(
                 "review.no_reviewer",
@@ -189,6 +225,16 @@ class PeerReviewCoordinator:
         await self._persist(request, result)
         await self._apply_state_transition(request, result)
         await self._feedback_dna(request, result)
+        # Stage 3: DNAAwareSelector keeps an in-run load counter — tell it that
+        # reviewer_role just completed a review so the next select() sees the
+        # updated load.
+        if isinstance(self._selector, DNAAwareSelector):
+            self._selector.record_review(reviewer_role)
+        # Stage 3: broadcast a rework signal so ReworkScheduler (or any other
+        # subscriber) can pick it up. Only for MAJOR/CRITICAL where the review
+        # flagged pending_rework explicitly.
+        if result.pending_rework:
+            await self._publish_rework_event(request, result)
 
         self._logger.info(
             "review.done",
@@ -198,6 +244,50 @@ class PeerReviewCoordinator:
             pending_rework=result.pending_rework,
         )
         return result
+
+    async def _publish_rework_event(
+        self, request: PeerReviewRequest, result: PeerReviewResult
+    ) -> None:
+        """Stage 3 — notify ReworkScheduler that this review wants re-execution."""
+        await self._event_bus.publish(
+            "review.rework_requested",
+            {
+                "review_id": result.review_id,
+                "work_item_id": result.work_item_id,
+                "task_id": result.task_id,
+                "author_agent_id": result.author_agent_id,
+                "reviewer_agent_id": result.reviewer_agent_id,
+                "severity": result.severity.value,
+                "comments": list(result.comments),
+                "suggested_changes": list(result.suggested_changes),
+                "task_result_snapshot": request.task_result_snapshot,
+            },
+        )
+
+    async def _resolve_dep_source_roles(self, payload: dict[str, object]) -> set[str]:
+        """Resolve direct-dependency task_ids → owning agent roles (Tier 1 COI).
+
+        Missing WorkItems (dependency not yet tracked, cross-run references)
+        are ignored silently — COI is best-effort.
+        """
+        raw = payload.get("task_dependencies", [])
+        if not isinstance(raw, list):
+            return set()
+        roles: set[str] = set()
+        for dep in raw:
+            dep_task_id = str(dep)
+            if not dep_task_id:
+                continue
+            try:
+                item = await self._workspace.get_by_task_id(dep_task_id)
+            except Exception as exc:
+                self._logger.warning(
+                    "review.dep_lookup_error", task_id=dep_task_id, detail=str(exc)
+                )
+                continue
+            if item is not None:
+                roles.add(self._role_from_agent_id(item.agent_id))
+        return roles
 
     # ------------------------------------------------------------------
     # EventBus 핸들러

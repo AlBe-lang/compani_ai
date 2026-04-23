@@ -32,12 +32,33 @@ class MockWorkSpace:
         item.status = status
         item.updated_at = datetime.now(timezone.utc)
 
-    async def attach_result(self, work_item_id: str, result: TaskResult) -> None:
+    async def attach_result(
+        self,
+        work_item_id: str,
+        result: TaskResult,
+        *,
+        task_dependencies: list[str] | None = None,
+        task_description: str = "",
+    ) -> None:
+        # Part 7 Stage 3 — keyword args accepted for protocol parity with
+        # SharedWorkspace; test mock does not propagate them into events.
+        _ = task_dependencies, task_description
         item = self._items.get(work_item_id)
         if item is None:
             return
         item.result = result.model_copy(deep=True)
         item.updated_at = datetime.now(timezone.utc)
+
+    async def reopen(self, work_item_id: str, reason: str) -> WorkItem | None:
+        """Part 7 Stage 3 parity — DONE → IN_PROGRESS + rework_count +1."""
+        _ = reason
+        item = self._items.get(work_item_id)
+        if item is None or item.status is not WorkStatus.DONE:
+            return None
+        item.status = WorkStatus.IN_PROGRESS
+        item.rework_count += 1
+        item.updated_at = datetime.now(timezone.utc)
+        return item.model_copy(deep=True)
 
     async def get_by_task_id(self, task_id: str) -> WorkItem | None:
         work_item_id = self._task_index.get(task_id)

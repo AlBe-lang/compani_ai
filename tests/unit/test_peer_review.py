@@ -38,6 +38,7 @@ def _make_storage() -> MagicMock:
 def _make_event_bus() -> MagicMock:
     mock = MagicMock()
     mock.subscribe = MagicMock()
+    mock.publish = AsyncMock()
     return mock
 
 

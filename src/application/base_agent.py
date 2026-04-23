@@ -95,13 +95,30 @@ class BaseSLMAgent(ABC):
         # DNA 수치로 결정된 현재 실행에서 사용할 temperature (None이면 config 기본값 사용)
         self._dna_temperature: float | None = None
 
-    async def execute_task(self, task: Task) -> TaskResult:
-        """Execute a task with dependency wait, optional Q&A, and retry parsing."""
+    async def execute_task(
+        self,
+        task: Task,
+        *,
+        context: dict[str, object] | None = None,
+    ) -> TaskResult:
+        """Execute a task with dependency wait, optional Q&A, and retry parsing.
+
+        Part 7 Stage 3: ``context`` accepts:
+          * ``work_item_id``: str — reuse an existing WorkItem (rework path).
+            ReworkScheduler has already called workspace.reopen() so the item
+            is IN_PROGRESS; skip register + dependency handling.
+          * ``review_feedback``: dict with ``comments``/``suggested_changes``/
+            ``severity``/``review_id`` — injected into the prompt context so
+            the LLM absorbs prior reviewer comments.
+        """
         self._validate_task_role(task)
-        work_item_id: str | None = None
         import time as _time
 
         t_start = _time.monotonic()
+        extra = context or {}
+        reused_work_item_id = str(extra.get("work_item_id") or "")
+        is_rework = bool(extra.get("is_rework", False)) or bool(reused_work_item_id)
+        work_item_id: str | None = reused_work_item_id or None
 
         # DNA 로드 → temperature + 시스템 프롬프트 modifier 적용
         dna: AgentDNA | None = None
@@ -113,15 +130,28 @@ class BaseSLMAgent(ABC):
             "slm.task.start",
             task_id=task.id,
             dependency_count=len(task.dependencies),
+            is_rework=is_rework,
         )
         try:
-            work_item = self._new_work_item(task)
-            work_item_id = await self._workspace.register(work_item)
-            await self._handle_dependencies(task, work_item_id)
-            context = await self._build_context(task)
-            result, response_chars = await self._generate_result_with_retry(task, context)
+            if is_rework and reused_work_item_id:
+                # Rework path: WorkItem already reopened (IN_PROGRESS) — skip
+                # register + dep handling; those only apply on first attempt.
+                work_item_id = reused_work_item_id
+            else:
+                work_item = self._new_work_item(task)
+                work_item_id = await self._workspace.register(work_item)
+                await self._handle_dependencies(task, work_item_id)
+            exec_context = await self._build_context(task)
+            if "review_feedback" in extra:
+                exec_context["review_feedback"] = extra["review_feedback"]
+            result, response_chars = await self._generate_result_with_retry(task, exec_context)
             await self._workspace.set_status(work_item_id, WorkStatus.DONE)
-            await self._workspace.attach_result(work_item_id, result)
+            await self._workspace.attach_result(
+                work_item_id,
+                result,
+                task_dependencies=task.dependencies,
+                task_description=task.description,
+            )
 
             # DNA 갱신 — 성공 결과 반영
             if self._dna_manager is not None and dna is not None:

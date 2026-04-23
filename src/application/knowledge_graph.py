@@ -12,18 +12,29 @@ Routing priority:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import unicodedata
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from adapters.qdrant_storage import QARecord, QdrantStorage
 from domain.contracts import TaskResult
 from observability.logger import get_logger
+
+if TYPE_CHECKING:
+    from domain.ports import StoragePort
 
 log = get_logger(__name__)
 
 _EMA_ALPHA = 0.2  # Rule 10: EMA instead of simple replacement
 _MIN_HITS_FOR_ROUTING = 2  # minimum matching records before trusting KnowledgeGraph
 _SIMILARITY_THRESHOLD = 0.65  # minimum cosine similarity to consider a result useful
+# Part 7 Stage 3 (R-06): SQLite persistence key prefix for expertise EMA values.
+# Same kv_store row pattern as DNAManager uses (no dedicated table lookup),
+# so the 005_expertise.sql migration is declarative only — schema exists for
+# future direct SQL analytics but runtime data flows through kv_store.
+_EXPERTISE_KEY_PREFIX = "kg_expertise:"
 
 # Keyword fallback routing table (from SYSTEM_ARCHITECTURE.md §4.5).
 # R-04 (Stage 4): matched with whole-word boundaries, not substring — prevents
@@ -65,8 +76,13 @@ class KnowledgeGraph:
     expertise lookups between Qdrant queries.
     """
 
-    def __init__(self, qdrant: QdrantStorage) -> None:
+    def __init__(
+        self,
+        qdrant: QdrantStorage,
+        storage: "StoragePort | None" = None,
+    ) -> None:
         self._qdrant = qdrant
+        self._storage = storage  # Part 7 Stage 3: optional — enables EMA persistence
         # {role: {topic: ema_expertise_level}}
         self._expertise: dict[str, dict[str, float]] = {}
 
@@ -193,17 +209,86 @@ class KnowledgeGraph:
         """Return EMA expertise level [0.0, 1.0] for a role on a topic."""
         return self._get_expertise(role, topic)
 
+    async def load_expertise(self) -> None:
+        """Part 7 Stage 3 (R-06) — populate in-memory expertise from SQLite.
+
+        Call once at startup before normal routing begins. Missing storage
+        or empty results are silently tolerated (first-run / testing).
+        No-op when ``storage`` was not injected at construction.
+        """
+        if self._storage is None:
+            return
+        try:
+            rows = await self._storage.query()
+        except Exception as exc:
+            log.warning("knowledge_graph.load_expertise_error", detail=str(exc))
+            return
+        loaded = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            # Rows we care about must look like the record we save; other
+            # kv_store rows (DNA, metrics, etc.) are ignored by field presence.
+            if (
+                "role" in row
+                and "topic" in row
+                and "ema_value" in row
+                and "_kind" in row
+                and row.get("_kind") == "kg_expertise"
+            ):
+                role = str(row["role"])
+                topic = str(row["topic"])
+                try:
+                    value = float(row["ema_value"])  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    continue
+                self._expertise.setdefault(role, {})[topic] = value
+                loaded += 1
+        log.info("knowledge_graph.expertise_loaded", count=loaded)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _update_expertise_ema(self, role: str, topic: str, success: bool) -> None:
-        """Apply EMA update: new = α * current_sample + (1 − α) * previous."""
+        """Apply EMA update: new = α * current_sample + (1 − α) * previous.
+
+        When ``storage`` is injected (Stage 3), the new value is persisted to
+        SQLite via a fire-and-forget asyncio task so the hot path stays sync.
+        Crashes may lose the last in-flight update — acceptable given EMA
+        self-heals over samples (Rule 10 §1 context preservation policy).
+        """
         if role not in self._expertise:
             self._expertise[role] = {}
         prev = self._expertise[role].get(topic, 0.5)  # neutral prior
         sample = 1.0 if success else 0.0
-        self._expertise[role][topic] = _EMA_ALPHA * sample + (1 - _EMA_ALPHA) * prev
+        new_value = _EMA_ALPHA * sample + (1 - _EMA_ALPHA) * prev
+        self._expertise[role][topic] = new_value
+
+        if self._storage is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._persist_expertise(role, topic, new_value))
+            except RuntimeError:
+                # No running loop (e.g. during sync test setup) — skip persist.
+                log.debug("knowledge_graph.persist_skip_no_loop", role=role, topic=topic)
+
+    async def _persist_expertise(self, role: str, topic: str, value: float) -> None:
+        """SQLite save for one (role, topic) EMA. Tolerates storage errors."""
+        if self._storage is None:
+            return
+        key = f"{_EXPERTISE_KEY_PREFIX}{role}:{topic}"
+        payload: dict[str, object] = {
+            "_kind": "kg_expertise",
+            "role": role,
+            "topic": topic,
+            "ema_value": value,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await self._storage.save(key, payload)
+        except Exception as exc:
+            log.warning("knowledge_graph.persist_error", role=role, topic=topic, detail=str(exc))
 
     def _get_expertise(self, role: str, topic: str) -> float:
         return self._expertise.get(role, {}).get(topic, 0.5)  # neutral default
