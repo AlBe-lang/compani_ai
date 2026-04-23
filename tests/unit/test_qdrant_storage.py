@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from adapters.qdrant_storage import QARecord, QdrantStorage, _QDRANT_AVAILABLE
+from adapters.qdrant_storage import _QDRANT_AVAILABLE, QARecord, QdrantStorage
 
 pytestmark = pytest.mark.skipif(
     not _QDRANT_AVAILABLE,
@@ -89,8 +89,8 @@ async def test_qa_record_payload_preserved(qdrant: QdrantStorage) -> None:
 # ------------------------------------------------------------------
 
 
-def _make_task_payload(**kwargs: object) -> dict:
-    defaults: dict = {
+def _make_task_payload(**kwargs: object) -> dict[str, object]:
+    defaults: dict[str, object] = {
         "task_id": "task_001",
         "agent_id": "mlops_agent",
         "approach": "Build Docker image with multi-stage build",
@@ -128,3 +128,79 @@ async def test_search_after_close_returns_empty(qdrant: QdrantStorage) -> None:
     await qdrant.close()
     results = await qdrant.search_qa("anything")
     assert results == []
+
+
+# ------------------------------------------------------------------
+# R-05 regression: no DeprecationWarning + multilingual routing
+# ------------------------------------------------------------------
+
+
+async def test_add_and_search_emit_no_qdrant_deprecation_warning(
+    qdrant: QdrantStorage,
+) -> None:
+    """Regression for R-05: the legacy `add` / `query` API used to emit
+    UserWarning('add method has been deprecated...') from qdrant-client.
+    The migration to `upsert` + `query_points` must remove those warnings.
+    """
+    import warnings
+
+    record = _make_qa_record(question="FastAPI router test", answer="use APIRouter")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await qdrant.add_qa(record)
+        await qdrant.search_qa("FastAPI router")
+
+    deprecated_msgs = [
+        str(w.message)
+        for w in caught
+        if "deprecated" in str(w.message).lower()
+        and ("add" in str(w.message) or "query" in str(w.message))
+    ]
+    assert deprecated_msgs == [], f"qdrant deprecated-API warnings still present: {deprecated_msgs}"
+
+
+async def test_korean_query_returns_relevant_korean_record(qdrant: QdrantStorage) -> None:
+    """Regression for R-05 multilingual: Korean query must surface a Korean
+    record in the result set (semantic routing for non-English users).
+    Three single-language records are seeded so the absence of multilingual
+    embedding would surface English-only matches first.
+    """
+    await qdrant.add_qa(
+        _make_qa_record(
+            role="frontend",
+            question="React 컴포넌트는 어떻게 만드나요?",
+            answer="useState와 useEffect 훅으로 상태와 부수효과를 관리합니다.",
+        )
+    )
+    await qdrant.add_qa(
+        _make_qa_record(
+            role="backend",
+            question="How do I write a GraphQL resolver in Python?",
+            answer="Use Strawberry or Ariadne with type definitions.",
+        )
+    )
+    await qdrant.add_qa(
+        _make_qa_record(
+            role="mlops",
+            question="Compose a Kubernetes Deployment manifest",
+            answer="Use kind: Deployment with spec.replicas and template.",
+        )
+    )
+
+    results = await qdrant.search_qa("리액트 컴포넌트 만드는 법", top_k=3)
+    assert len(results) >= 1
+    roles = [r.get("role") for r in results]
+    assert (
+        "frontend" in roles
+    ), f"Korean query failed to surface the Korean frontend record; got roles={roles}"
+
+
+async def test_init_creates_both_collections() -> None:
+    """Stage 5: collections are now pre-created in init() instead of lazily
+    on first write. Both qa_history and task_results must exist after init.
+    """
+    q = QdrantStorage(path=":memory:")
+    await q.init()
+    client = q._require_client()
+    existing = {c.name for c in client.get_collections().collections}
+    assert {"qa_history", "task_results"}.issubset(existing)

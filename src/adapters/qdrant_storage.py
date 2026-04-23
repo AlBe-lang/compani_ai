@@ -1,7 +1,10 @@
 """Qdrant vector storage adapter for Q&A history and task result indexing.
 
 Uses local file-based persistence (QdrantClient(path=...)) — no separate server
-required. Embedding is handled by fastembed (bundled with qdrant-client[fastembed]).
+required. Embedding is performed by Qdrant's inline ``models.Document`` mechanism,
+which delegates to fastembed under the hood. The embedding model is
+explicitly multilingual so Korean (and ~50 other languages) Q&A traffic is
+routed semantically rather than falling through to keyword/CTO fallback.
 
 Collections:
   qa_history    — agent Q&A interactions (question + answer text)
@@ -15,6 +18,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from observability.logger import get_logger
 
@@ -23,8 +27,16 @@ log = get_logger(__name__)
 _QA_COLLECTION = "qa_history"
 _TASK_COLLECTION = "task_results"
 
+# R-05 (Stage 5): explicit multilingual embedding model so Korean and other
+# non-English questions route through semantic search instead of getting lost
+# in the English-only keyword fallback. MiniLM variant chosen over E5-large
+# because Mac Mini 16GB hosts CTO + SLM models simultaneously and 117MB is
+# affordable; E5-large would add ~2.24GB on disk plus runtime memory.
+_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_VECTOR_SIZE = 384  # dim of the MiniLM model above
+
 try:
-    from qdrant_client import QdrantClient  # type: ignore[import-untyped]
+    from qdrant_client import QdrantClient, models  # type: ignore[import-untyped]
 
     _QDRANT_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -50,7 +62,7 @@ class QARecord:
 
 
 class QdrantStorage:
-    """Qdrant adapter using local file persistence and fastembed for embeddings.
+    """Qdrant adapter using local file persistence and inline fastembed inference.
 
     Persistence path defaults to ``data/qdrant``.  Pass ``path=":memory:"``
     in tests to avoid disk I/O.
@@ -66,7 +78,7 @@ class QdrantStorage:
         return self._client
 
     async def init(self) -> None:
-        """Initialize Qdrant client and ensure collections exist."""
+        """Initialize Qdrant client and ensure both collections exist."""
         if not _QDRANT_AVAILABLE:
             log.warning("qdrant.unavailable", detail="qdrant-client[fastembed] not installed")
             return
@@ -79,11 +91,26 @@ class QdrantStorage:
             return QdrantClient(path=path)
 
         self._client = await asyncio.to_thread(_open)
-        log.info("qdrant.initialized", path=path)
+        await asyncio.to_thread(self._ensure_collections)
+        log.info("qdrant.initialized", path=path, model=_EMBEDDING_MODEL)
 
-    # Collections are created on first write by fastembed's `add()` method.
-    # Manual pre-creation would produce an unnamed vector config incompatible
-    # with fastembed, which requires named vectors.
+    def _ensure_collections(self) -> None:
+        """Create qa_history / task_results collections if missing.
+
+        Safe to call repeatedly; existing collections are left untouched.
+        """
+        client = self._require_client()
+        existing = {c.name for c in client.get_collections().collections}
+        for name in (_QA_COLLECTION, _TASK_COLLECTION):
+            if name not in existing:
+                client.create_collection(
+                    collection_name=name,
+                    vectors_config=models.VectorParams(
+                        size=_VECTOR_SIZE,
+                        distance=models.Distance.COSINE,
+                    ),
+                )
+                log.info("qdrant.collection_created", name=name, size=_VECTOR_SIZE)
 
     # ------------------------------------------------------------------
     # Q&A interactions
@@ -96,7 +123,7 @@ class QdrantStorage:
 
         # Embed: concatenate question + answer for richer context
         text = f"{record.question} {record.answer}"
-        payload = {
+        payload: dict[str, Any] = {
             "agent_id": record.agent_id,
             "role": record.role,
             "question": record.question,
@@ -108,34 +135,38 @@ class QdrantStorage:
         }
         client = self._client
 
-        def _add() -> None:
-            client.add(
+        def _upsert() -> None:
+            client.upsert(
                 collection_name=_QA_COLLECTION,
-                documents=[text],
-                metadata=[payload],
-                ids=[str(uuid.uuid4())],
+                points=[
+                    models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=models.Document(text=text, model=_EMBEDDING_MODEL),
+                        payload=payload,
+                    )
+                ],
             )
 
-        await asyncio.to_thread(_add)
+        await asyncio.to_thread(_upsert)
         log.debug("qdrant.qa_added", role=record.role, run_id=record.run_id)
 
-    async def search_qa(self, query: str, top_k: int = 5) -> list[dict]:
+    async def search_qa(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """Semantic search over Q&A history. Returns list of payload dicts."""
         if not _QDRANT_AVAILABLE or self._client is None:
             return []
 
         client = self._client
 
-        def _search() -> list[dict]:
+        def _search() -> list[dict[str, Any]]:
             existing = {c.name for c in client.get_collections().collections}
             if _QA_COLLECTION not in existing:
                 return []
-            results = client.query(
+            response = client.query_points(
                 collection_name=_QA_COLLECTION,
-                query_text=query,
+                query=models.Document(text=query, model=_EMBEDDING_MODEL),
                 limit=top_k,
             )
-            return [r.metadata for r in results]
+            return [p.payload for p in response.points if p.payload is not None]
 
         results = await asyncio.to_thread(_search)
         log.debug("qdrant.qa_search", query_len=len(query), hits=len(results))
@@ -145,51 +176,54 @@ class QdrantStorage:
     # Task results
     # ------------------------------------------------------------------
 
-    async def add_task_result(self, payload: dict) -> None:
+    async def add_task_result(self, payload: dict[str, Any]) -> None:
         """Index a task result for expertise routing context."""
         if not _QDRANT_AVAILABLE or self._client is None:
             return
 
         approach = str(payload.get("approach", ""))
         file_paths = " ".join(
-            f.get("path", "") if isinstance(f, dict) else str(f)
-            for f in payload.get("files", [])
+            f.get("path", "") if isinstance(f, dict) else str(f) for f in payload.get("files", [])
         )
         text = f"{approach} {file_paths}".strip() or "task result"
         client = self._client
 
-        def _add() -> None:
-            client.add(
+        def _upsert() -> None:
+            client.upsert(
                 collection_name=_TASK_COLLECTION,
-                documents=[text],
-                metadata=[payload],
-                ids=[str(uuid.uuid4())],
+                points=[
+                    models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=models.Document(text=text, model=_EMBEDDING_MODEL),
+                        payload=payload,
+                    )
+                ],
             )
 
-        await asyncio.to_thread(_add)
+        await asyncio.to_thread(_upsert)
         log.debug(
             "qdrant.task_added",
             agent_id=payload.get("agent_id"),
             run_id=payload.get("run_id"),
         )
 
-    async def search_task_results(self, query: str, top_k: int = 5) -> list[dict]:
+    async def search_task_results(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """Semantic search over indexed task results."""
         if not _QDRANT_AVAILABLE or self._client is None:
             return []
 
         client = self._client
 
-        def _search() -> list[dict]:
+        def _search() -> list[dict[str, Any]]:
             existing = {c.name for c in client.get_collections().collections}
             if _TASK_COLLECTION not in existing:
                 return []
-            results = client.query(
+            response = client.query_points(
                 collection_name=_TASK_COLLECTION,
-                query_text=query,
+                query=models.Document(text=query, model=_EMBEDDING_MODEL),
                 limit=top_k,
             )
-            return [r.metadata for r in results]
+            return [p.payload for p in response.points if p.payload is not None]
 
         results = await asyncio.to_thread(_search)
         log.debug("qdrant.task_search", query_len=len(query), hits=len(results))
