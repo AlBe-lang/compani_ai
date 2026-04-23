@@ -69,6 +69,12 @@ async def orchestrate_project(
     )
     team: dict[str, AgentPort] = factory.create_team()
     cto = factory.create_cto(team=team)
+    # Part 8 Stage 1: per-role + total LLM concurrency limiter.
+    limiter = factory.create_concurrency_limiter()
+    logger.info(
+        "orchestrator.concurrency",
+        **limiter.config,
+    )
 
     logger.info("orchestrator.strategy.start", request_length=len(request))
     strategy: Strategy = await cto.create_strategy(request)
@@ -79,7 +85,10 @@ async def orchestrate_project(
 
     async def _run_task(task: Task) -> TaskResult:
         agent_key = _ROLE_KEY[task.agent_role]
-        return await team[agent_key].execute_task(task)
+        # Part 8 Stage 1: acquire role + total semaphore before LLM call
+        # to respect Mac Mini 16GB memory budget (I-04, §7.3).
+        async with limiter.limit(agent_key):
+            return await team[agent_key].execute_task(task)
 
     cto_qa_task = asyncio.create_task(cto.handle_questions(queue))
     try:
@@ -173,13 +182,19 @@ async def app_main(request: str | None = None) -> None:
     storage = SQLiteStorage(config.db_path)
     await storage.init()
 
-    qdrant = QdrantStorage(path="data/qdrant")
+    # Part 8 Stage 1: embedding model driven by SystemConfig (EmbeddingPreset)
+    qdrant = QdrantStorage(
+        path="data/qdrant",
+        embedding_model=config.embedding_preset.value,
+        allow_recreate=config.allow_embedding_collection_recreate,
+    )
     await qdrant.init()
 
     cache = RedisCache(redis_url="redis://localhost:6379", fallback=storage)
     await cache.connect()
 
-    knowledge_graph = KnowledgeGraph(qdrant=qdrant)
+    knowledge_graph = KnowledgeGraph(qdrant=qdrant, storage=storage)
+    await knowledge_graph.load_expertise()
     dna_manager = DNAManager(storage=storage)
 
     bus = InProcessEventBus()

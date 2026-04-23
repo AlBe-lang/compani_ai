@@ -11,6 +11,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "benchmark: performance benchmarks — excluded from default `make test`",
 ]
 
 [tool.black]

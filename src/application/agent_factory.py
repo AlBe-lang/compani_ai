@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application.backend_agent import BackendSLMAgent, BackendSLMConfig
+from application.concurrency import LLMConcurrencyLimiter
 from application.cto_agent import CTOAgent, CTOConfig
 from application.emergency_meeting import EmergencyMeeting, EmergencyMeetingConfig
 from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
@@ -40,6 +42,37 @@ _DEFAULT_SLM_MODEL = "gemma4:e4b"
 _DEFAULT_MLOPS_MODEL = "llama3.2:3b"
 
 
+class EmbeddingPreset(str, Enum):
+    """Part 8 Stage 1 (R-05B/C) — Qdrant 임베딩 모델 선택지.
+
+    전환 시 벡터 차원이 달라지므로 기존 컬렉션은 재생성 필요 (R-05C 자동 통합
+    — QdrantStorage.init이 차원 불일치 감지 시 WARN 후 재생성).
+
+    기본값 근거: MTEB 다국어 벤치에서 mpnet-base-v2 이 MiniLM 대비 +15% 품질.
+    Mac Mini M4 16GB 기준 메모리 여유 0.8GB 로 수용 가능. 실전 E2E 에서 swap
+    감지되면 MINILM_FAST 로 복원 (1줄 변경). E5_BEST 는 2.24GB 로 Mac Mini
+    에선 불가 — Windows 32GB+ 전용.
+    """
+
+    MINILM_FAST = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 384d
+    MPNET_BALANCED = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"  # 768d
+    E5_BEST = "intfloat/multilingual-e5-large"  # 1024d
+
+
+# Embedding preset → vector dimension (Qdrant VectorParams.size).
+# Hardcoded from model cards; kept in sync with EmbeddingPreset literal values.
+_PRESET_DIMENSIONS: dict[EmbeddingPreset, int] = {
+    EmbeddingPreset.MINILM_FAST: 384,
+    EmbeddingPreset.MPNET_BALANCED: 768,
+    EmbeddingPreset.E5_BEST: 1024,
+}
+
+
+def preset_vector_size(preset: EmbeddingPreset) -> int:
+    """Return the vector dimension for the given preset."""
+    return _PRESET_DIMENSIONS[preset]
+
+
 @dataclass
 class SystemConfig:
     """Top-level runtime configuration for the multi-agent system."""
@@ -69,6 +102,17 @@ class SystemConfig:
     reviewer_selector_mode: str = "fixed"  # "fixed" | "dna_aware"
     rework_enabled: bool = False
     rework_max_attempts: int = 2
+    # Part 8 Stage 1 — 임베딩 모델 선택지 (R-05B/C)
+    embedding_preset: EmbeddingPreset = EmbeddingPreset.MPNET_BALANCED
+    # 차원 불일치 시 자동 컬렉션 재생성 허용 여부. False 면 명확한 오류 메시지
+    # 로 실패(사용자가 명시 opt-in 해야 데이터 손실 가능 전환 수행).
+    allow_embedding_collection_recreate: bool = True
+    # Part 8 Stage 1 — LLM 동시성 상한 (Q5)
+    # 기본값은 Mac Mini M4 16GB 기준 안전값. 32GB+ 데스크탑에선 slm=2/total=3 권장.
+    llm_concurrency_cto: int = 1
+    llm_concurrency_slm: int = 1
+    llm_concurrency_mlops: int = 1
+    llm_concurrency_total: int = 2
 
 
 class AgentFactory:
@@ -133,6 +177,15 @@ class AgentFactory:
             "frontend": self.create_frontend(),
             "mlops": self.create_mlops(),
         }
+
+    def create_concurrency_limiter(self) -> LLMConcurrencyLimiter:
+        """Part 8 Stage 1 — per-role + total LLM concurrency limiter."""
+        return LLMConcurrencyLimiter(
+            cto=self._config.llm_concurrency_cto,
+            slm=self._config.llm_concurrency_slm,
+            mlops=self._config.llm_concurrency_mlops,
+            total=self._config.llm_concurrency_total,
+        )
 
     def create_emergency_meeting(
         self,

@@ -27,13 +27,20 @@ log = get_logger(__name__)
 _QA_COLLECTION = "qa_history"
 _TASK_COLLECTION = "task_results"
 
-# R-05 (Stage 5): explicit multilingual embedding model so Korean and other
-# non-English questions route through semantic search instead of getting lost
-# in the English-only keyword fallback. MiniLM variant chosen over E5-large
-# because Mac Mini 16GB hosts CTO + SLM models simultaneously and 117MB is
-# affordable; E5-large would add ~2.24GB on disk plus runtime memory.
-_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-_VECTOR_SIZE = 384  # dim of the MiniLM model above
+# Part 6 S5 default — multilingual MiniLM. Part 8 Stage 1 upgraded default
+# to mpnet-base-v2 for +15% MTEB 다국어 quality on Mac Mini 16GB budget
+# (~420MB). Callers can override via QdrantStorage(embedding_model=...).
+# EmbeddingPreset enum lives in application.agent_factory to keep this
+# adapter layer free of application-config knowledge.
+_DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+_DEFAULT_VECTOR_SIZE = 768  # dim of mpnet-base-v2
+
+# Known model → vector dimension mapping. Updated alongside EmbeddingPreset.
+_MODEL_DIMENSIONS: dict[str, int] = {
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2": 384,
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": 768,
+    "intfloat/multilingual-e5-large": 1024,
+}
 
 try:
     from qdrant_client import QdrantClient, models  # type: ignore[import-untyped]
@@ -66,16 +73,41 @@ class QdrantStorage:
 
     Persistence path defaults to ``data/qdrant``.  Pass ``path=":memory:"``
     in tests to avoid disk I/O.
+
+    Part 8 Stage 1 added ``embedding_model`` parameter (R-05B/C). When the
+    requested model's vector dimension differs from an existing collection's
+    configured dimension, ``init()`` recreates the collection if
+    ``allow_recreate=True`` (WARN log + data loss) or raises a clear
+    ``AdapterError`` otherwise. Default ``allow_recreate=True`` matches
+    Part 6 Stage 5 behaviour where no accumulated data existed; production
+    deployments with real data should set ``allow_recreate=False``.
     """
 
-    def __init__(self, path: str = "data/qdrant") -> None:
+    def __init__(
+        self,
+        path: str = "data/qdrant",
+        embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+        *,
+        allow_recreate: bool = True,
+    ) -> None:
         self._path = path
+        self._embedding_model = embedding_model
+        self._vector_size = _MODEL_DIMENSIONS.get(embedding_model, _DEFAULT_VECTOR_SIZE)
+        self._allow_recreate = allow_recreate
         self._client: "QdrantClient | None" = None  # type: ignore[name-defined]
 
     def _require_client(self) -> "QdrantClient":  # type: ignore[name-defined]
         if self._client is None:
             raise RuntimeError("QdrantStorage not initialized — call init() first")
         return self._client
+
+    @property
+    def embedding_model(self) -> str:
+        return self._embedding_model
+
+    @property
+    def vector_size(self) -> int:
+        return self._vector_size
 
     async def init(self) -> None:
         """Initialize Qdrant client and ensure both collections exist."""
@@ -92,25 +124,75 @@ class QdrantStorage:
 
         self._client = await asyncio.to_thread(_open)
         await asyncio.to_thread(self._ensure_collections)
-        log.info("qdrant.initialized", path=path, model=_EMBEDDING_MODEL)
+        log.info(
+            "qdrant.initialized",
+            path=path,
+            model=self._embedding_model,
+            vector_size=self._vector_size,
+        )
 
     def _ensure_collections(self) -> None:
-        """Create qa_history / task_results collections if missing.
+        """Create or reconcile qa_history / task_results collections.
 
-        Safe to call repeatedly; existing collections are left untouched.
+        Dimension reconciliation (Part 8 Stage 1):
+          - Missing collection           → create with current vector_size.
+          - Collection with same size    → leave alone.
+          - Collection with wrong size   → if allow_recreate=True, delete+recreate
+            with WARN; otherwise raise ``AdapterError`` with clear guidance.
         """
         client = self._require_client()
-        existing = {c.name for c in client.get_collections().collections}
+        existing_names = {c.name for c in client.get_collections().collections}
         for name in (_QA_COLLECTION, _TASK_COLLECTION):
-            if name not in existing:
-                client.create_collection(
-                    collection_name=name,
-                    vectors_config=models.VectorParams(
-                        size=_VECTOR_SIZE,
-                        distance=models.Distance.COSINE,
-                    ),
+            if name in existing_names:
+                current_size = self._get_collection_vector_size(name)
+                if current_size == self._vector_size:
+                    continue
+                if not self._allow_recreate:
+                    raise RuntimeError(
+                        f"Qdrant collection '{name}' uses vector size {current_size} "
+                        f"but embedding model '{self._embedding_model}' requires "
+                        f"{self._vector_size}. To migrate (destructive), re-create "
+                        f"QdrantStorage with allow_recreate=True or delete the "
+                        f"collection manually."
+                    )
+                log.warning(
+                    "qdrant.collection_recreating",
+                    name=name,
+                    old_size=current_size,
+                    new_size=self._vector_size,
+                    reason="embedding_model_changed",
                 )
-                log.info("qdrant.collection_created", name=name, size=_VECTOR_SIZE)
+                client.delete_collection(collection_name=name)
+            client.create_collection(
+                collection_name=name,
+                vectors_config=models.VectorParams(
+                    size=self._vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+            )
+            log.info("qdrant.collection_created", name=name, size=self._vector_size)
+
+    def _get_collection_vector_size(self, name: str) -> int:
+        """Extract configured vector size from an existing collection.
+
+        Qdrant exposes vector params under ``collection.config.params.vectors``
+        which can be a single ``VectorParams`` or a dict (named vectors) — the
+        type stub also permits ``None``. We assume the unnamed (default)
+        configuration this adapter creates and fall back to the configured
+        size if the shape is unexpected.
+        """
+        client = self._require_client()
+        info = client.get_collection(collection_name=name)
+        vectors = info.config.params.vectors
+        if vectors is None:
+            return self._vector_size
+        size_attr = getattr(vectors, "size", None)
+        if size_attr is not None:
+            return int(size_attr)
+        if isinstance(vectors, dict) and vectors:
+            first = next(iter(vectors.values()))
+            return int(getattr(first, "size", self._vector_size))
+        return self._vector_size
 
     # ------------------------------------------------------------------
     # Q&A interactions
@@ -141,7 +223,7 @@ class QdrantStorage:
                 points=[
                     models.PointStruct(
                         id=str(uuid.uuid4()),
-                        vector=models.Document(text=text, model=_EMBEDDING_MODEL),
+                        vector=models.Document(text=text, model=self._embedding_model),
                         payload=payload,
                     )
                 ],
@@ -163,7 +245,7 @@ class QdrantStorage:
                 return []
             response = client.query_points(
                 collection_name=_QA_COLLECTION,
-                query=models.Document(text=query, model=_EMBEDDING_MODEL),
+                query=models.Document(text=query, model=self._embedding_model),
                 limit=top_k,
             )
             return [p.payload for p in response.points if p.payload is not None]
@@ -194,7 +276,7 @@ class QdrantStorage:
                 points=[
                     models.PointStruct(
                         id=str(uuid.uuid4()),
-                        vector=models.Document(text=text, model=_EMBEDDING_MODEL),
+                        vector=models.Document(text=text, model=self._embedding_model),
                         payload=payload,
                     )
                 ],
@@ -220,7 +302,7 @@ class QdrantStorage:
                 return []
             response = client.query_points(
                 collection_name=_TASK_COLLECTION,
-                query=models.Document(text=query, model=_EMBEDDING_MODEL),
+                query=models.Document(text=query, model=self._embedding_model),
                 limit=top_k,
             )
             return [p.payload for p in response.points if p.payload is not None]
