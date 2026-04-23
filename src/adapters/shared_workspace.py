@@ -90,6 +90,20 @@ class SharedWorkspace:
         self._cache[work_item_id] = item
         await self._storage.update(work_item_id, item.model_dump(mode="json"))
 
+        # Part 7 Stage 2 — publish task.completed only when the WorkItem actually
+        # reached DONE. attach_result may in rare cases be invoked on FAILED items
+        # (defensive path); in that case no peer review should be triggered.
+        if item.status is WorkStatus.DONE:
+            await self._event_bus.publish(
+                "task.completed",
+                {
+                    "item_id": work_item_id,
+                    "task_id": item.task_id,
+                    "agent_id": item.agent_id,
+                    "result": result.model_dump(mode="json"),
+                },
+            )
+
     async def get_by_task_id(self, task_id: str) -> WorkItem | None:
         work_item_id = self._task_index.get(task_id)
         if work_item_id is None:

@@ -19,12 +19,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from domain.contracts import ReviewDecision, WorkItem, WorkStatus
+from domain.contracts import MeetingDecision, ReviewDecision, WorkItem, WorkStatus
 from domain.ports import EventBusPort, StoragePort
 from observability.logger import get_logger
 
 if TYPE_CHECKING:
     from application.cto_agent import CTOAgent
+    from application.emergency_meeting import EmergencyMeeting
 
 log = get_logger(__name__)
 
@@ -52,7 +53,7 @@ class GateResult:
 class GateConfig:
     """Gate 통과 기준값."""
 
-    max_failure_rate: float = 0.3    # 실패율 30% 초과 시 FAIL
+    max_failure_rate: float = 0.3  # 실패율 30% 초과 시 FAIL
     max_avg_duration: float = 120.0  # 평균 120초 초과 시 경고 (FAIL 트리거 아님)
 
 
@@ -71,12 +72,14 @@ class StageGateMeeting:
         storage: StoragePort,
         run_id: str,
         config: GateConfig | None = None,
+        emergency_meeting: "EmergencyMeeting | None" = None,
     ) -> None:
         self._cto = cto
         self._event_bus = event_bus
         self._storage = storage
         self._run_id = run_id
         self._config = config or GateConfig()
+        self._emergency_meeting = emergency_meeting
         self._logger = get_logger(component="stage_gate", run_id=run_id)
         self._blocking_items: list[dict[str, object]] = []
 
@@ -112,22 +115,59 @@ class StageGateMeeting:
         return delegated
 
     async def evaluate_emergency(self, blocking_item: dict[str, object]) -> GateResult:
-        """blocking.detected 이벤트 수신 시 긴급 Gate 소집."""
+        """blocking.detected 이벤트 수신 시 긴급 Gate 소집.
+
+        Part 7 Stage 1: EmergencyMeeting 이 주입되어 있으면 실제 소규모 재합의를
+        수행(DNA 가중 투표 → CTO 판단 → 3회 실패 시 DNA 폴백). 주입되지 않은
+        경우(테스트·초기 배포 등) 기존 고정 REPLAN 동작 유지.
+        """
         self._logger.warning(
             "gate.emergency.start",
             item_id=blocking_item.get("item_id"),
             agent_id=blocking_item.get("agent_id"),
         )
-        # 긴급 Gate는 blocking 단일 아이템 기준 → 즉시 ABORT 위험 판단
+
+        if self._emergency_meeting is None:
+            # 회의 모듈 미주입 — 기존 동작(즉시 REPLAN) 유지
+            result = GateResult(
+                verdict=GateVerdict.REPLAN,
+                reason=f"blocking detected on item {blocking_item.get('item_id')}",
+                failure_rate=1.0,
+                avg_duration=0.0,
+                total_items=1,
+            )
+            await self._persist(result)
+            return result
+
+        consensus = await self._emergency_meeting.convene(blocking_item)
+        verdict = self._map_meeting_to_verdict(consensus.final_decision)
+        reason = (
+            f"meeting {consensus.meeting_id} → {consensus.final_decision.value} "
+            f"(source={consensus.decision_source.value})"
+        )
         result = GateResult(
-            verdict=GateVerdict.REPLAN,
-            reason=f"blocking detected on item {blocking_item.get('item_id')}",
+            verdict=verdict,
+            reason=reason,
             failure_rate=1.0,
             avg_duration=0.0,
             total_items=1,
         )
+        self._logger.info(
+            "gate.emergency.resolved",
+            meeting_id=consensus.meeting_id,
+            decision=consensus.final_decision.value,
+            source=consensus.decision_source.value,
+            verdict=verdict.value,
+        )
         await self._persist(result)
         return result
+
+    @staticmethod
+    def _map_meeting_to_verdict(decision: MeetingDecision) -> GateVerdict:
+        """회의 결정 → Gate verdict. ABORT만 중단, 나머지는 REPLAN."""
+        if decision is MeetingDecision.ABORT:
+            return GateVerdict.ABORT
+        return GateVerdict.REPLAN
 
     # ------------------------------------------------------------------
     # 내부 평가 로직
@@ -146,8 +186,7 @@ class StageGateMeeting:
             )
 
         failed = sum(
-            1 for item in work_items
-            if item.status in (WorkStatus.FAILED, WorkStatus.BLOCKED)
+            1 for item in work_items if item.status in (WorkStatus.FAILED, WorkStatus.BLOCKED)
         )
         failure_rate = failed / total
 
@@ -161,8 +200,11 @@ class StageGateMeeting:
 
         if failure_rate > self._config.max_failure_rate:
             return GateResult(
-                verdict=GateVerdict.ABORT,   # CTO가 REPLAN으로 바꿀 수 있음
-                reason=f"failure rate {failure_rate:.1%} exceeds threshold {self._config.max_failure_rate:.1%}",
+                verdict=GateVerdict.ABORT,  # CTO가 REPLAN으로 바꿀 수 있음
+                reason=(
+                    f"failure rate {failure_rate:.1%} exceeds threshold "
+                    f"{self._config.max_failure_rate:.1%}"
+                ),
                 failure_rate=failure_rate,
                 avg_duration=avg_duration,
                 total_items=total,
@@ -220,8 +262,16 @@ class StageGateMeeting:
         }
         await self._storage.save(key, payload)
 
-    def _on_blocking_detected(self, payload: dict[str, object]) -> None:
-        """EventBus 핸들러 — blocking.detected 이벤트 수신 시 비동기 긴급 Gate 소집."""
+    def _on_blocking_detected(
+        self, event_type: str = "blocking.detected", payload: dict[str, object] | None = None
+    ) -> None:
+        """EventBus 핸들러 — blocking.detected 이벤트 수신 시 비동기 긴급 Gate 소집.
+
+        EventBusPort 의 EventHandler 시그니처(event_type, payload)와 일치해야 한다.
+        직접 호출 편의를 위해 두 매개변수 모두 기본값을 가진다.
+        """
+        if payload is None:
+            return
         self._blocking_items.append(payload)
         # EventBus 핸들러는 동기이므로 asyncio.create_task로 비동기 Gate 소집
         try:

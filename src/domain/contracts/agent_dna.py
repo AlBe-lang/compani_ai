@@ -32,3 +32,11 @@ class AgentDNA(BaseModel):
     total_tasks: int = Field(default=0, ge=0)
     # BREAKING CHANGE: genes dict for 10 evolutionary traits (Part 6 Stage 3)
     genes: dict[str, float] = Field(default_factory=lambda: dict(_DEFAULT_GENES))
+    # Part 7 Stage 1 — emergency meeting participation count (non-breaking, default 0).
+    # Rule 10 §1: participation history is context worth preserving. Stage 2 will
+    # use this along with collaboration gene EMA for weighted voting refinement.
+    meeting_participation_count: int = Field(default=0, ge=0)
+    # Part 7 Stage 2 — peer review participation count (non-breaking, default 0).
+    # Incremented each time this agent reviews another's Task. Complements the
+    # collaboration gene EMA: count tracks frequency, gene tracks quality signal.
+    review_count: int = Field(default=0, ge=0)
