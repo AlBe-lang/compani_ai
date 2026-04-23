@@ -22,4 +22,3 @@ def generate_task_id() -> str:
 def generate_message_id() -> str:
     """Create a message-scoped unique identifier."""
     return _new_id("msg")
-

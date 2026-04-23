@@ -287,11 +287,7 @@ async def test_backend_stage1_emits_required_execution_logs(
 
     await agent.execute_task(_backend_task(dependencies=["dep-done"]))
 
-    payloads = [
-        json.loads(line)
-        for line in capsys.readouterr().err.splitlines()
-        if line.strip()
-    ]
+    payloads = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()]
     events = {payload.get("event") for payload in payloads}
     assert "slm.deps.waiting" in events
     assert "slm.qa.sent" in events

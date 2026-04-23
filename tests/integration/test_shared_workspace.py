@@ -116,7 +116,9 @@ async def test_detect_blocking_missing_item_returns_false(workspace: SharedWorks
 
 
 async def test_get_by_task_id_resolves_correct_item(workspace: SharedWorkspace) -> None:
-    item = WorkItem(id="work_task_abc_0001", task_id="task_abc", agent_id="backend", status=WorkStatus.PLANNED)
+    item = WorkItem(
+        id="work_task_abc_0001", task_id="task_abc", agent_id="backend", status=WorkStatus.PLANNED
+    )
     await workspace.register(item)
     found = await workspace.get_by_task_id("task_abc")
     assert found is not None

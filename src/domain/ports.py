@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Literal, Protocol, TypedDict, TypeAlias, runtime_checkable
+from typing import Literal, Protocol, TypeAlias, TypedDict, runtime_checkable
 
 from domain.contracts import Message, MessageType, Task, TaskResult, WorkItem, WorkStatus
 

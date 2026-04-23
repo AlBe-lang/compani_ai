@@ -58,12 +58,7 @@ class FileStorage:
                 lines.append(f"- {constraint}")
             lines.append("")
 
-        generated = [
-            f"- `{fi.path}` ({fi.type})"
-            for r in results
-            if r.success
-            for fi in r.files
-        ]
+        generated = [f"- `{fi.path}` ({fi.type})" for r in results if r.success for fi in r.files]
         if generated:
             lines += ["## Generated Files", ""]
             lines.extend(generated)

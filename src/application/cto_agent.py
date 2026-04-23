@@ -18,7 +18,6 @@ from domain.contracts import (
     ReviewResult,
     Strategy,
     Task,
-    TaskResult,
     WorkItem,
     WorkStatus,
 )
@@ -237,7 +236,9 @@ class CTOAgent:
             )
             return result
 
-        review_result, ignored_new_tasks_count, response_chars = await self._review_with_llm(work_items)
+        review_result, ignored_new_tasks_count, response_chars = await self._review_with_llm(
+            work_items
+        )
         if review_result.decision is not ReviewDecision.REPLAN:
             if ignored_new_tasks_count > 0:
                 self._logger.info(
@@ -256,7 +257,9 @@ class CTOAgent:
             return review_result
 
         if self._last_strategy is None:
-            raise CTOAgentError(ErrorCode.E_SYSTEM_CONFIG, "strategy context is required for replan")
+            raise CTOAgentError(
+                ErrorCode.E_SYSTEM_CONFIG, "strategy context is required for replan"
+            )
 
         if ignored_new_tasks_count > 0:
             self._logger.info(
@@ -429,9 +432,7 @@ class CTOAgent:
             self._logger.info("cto.qa_loop.stopped")
             raise
 
-    async def _handle_one_question(
-        self, queue: MessageQueuePort, msg: Message
-    ) -> None:
+    async def _handle_one_question(self, queue: MessageQueuePort, msg: Message) -> None:
         """Generate an LLM answer and route it back to the asking agent."""
         self._logger.info(
             "cto.qa.received",
@@ -476,6 +477,7 @@ class CTOAgent:
         context_str = ""
         if msg.context:
             import json as _json
+
             context_str = f"\n\nContext provided by agent:\n{_json.dumps(msg.context, indent=2)}"
         user_content = f"Question from {msg.from_agent}:\n{msg.content}{context_str}"
         return [

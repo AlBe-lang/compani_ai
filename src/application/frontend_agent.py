@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
 from typing import TYPE_CHECKING
 
 from domain.contracts import AgentRole
@@ -144,14 +143,12 @@ class FrontendSLMAgent(BaseSLMAgent):
         paths = [p for p, _ in entries]
 
         has_tsx = any(p.endswith(".tsx") for p in paths)
-        has_component = any(
-            "/components/" in f"/{p}/" and p.endswith(".tsx") for p in paths
-        )
-        has_props_interface = any(
-            "interface" in c and "props" in c.lower() for _, c in entries
-        )
+        has_component = any("/components/" in f"/{p}/" and p.endswith(".tsx") for p in paths)
+        has_props_interface = any("interface" in c and "props" in c.lower() for _, c in entries)
         has_functional_component = any(
-            "const " in c and "=>" in c and ("jsx" in c.lower() or "tsx" in c.lower() or "return (" in c)
+            "const " in c
+            and "=>" in c
+            and ("jsx" in c.lower() or "tsx" in c.lower() or "return (" in c)
             for _, c in entries
             if any(p.endswith(".tsx") for p in paths)
         )
@@ -190,9 +187,7 @@ class FrontendSLMAgent(BaseSLMAgent):
 
         has_usestate = any("usestate" in c.lower() for _, c in entries)
         has_useeffect = any("useeffect" in c.lower() for _, c in entries)
-        has_custom_hook = any(
-            "/hooks/" in f"/{p}/" and p.endswith(".ts") for p in paths
-        )
+        has_custom_hook = any("/hooks/" in f"/{p}/" and p.endswith(".ts") for p in paths)
 
         missing: list[str] = []
         if not has_usestate:
@@ -212,23 +207,18 @@ class FrontendSLMAgent(BaseSLMAgent):
         entries = self._extract_entries(payload)
         paths = [p for p, _ in entries]
 
-        has_api_module = any(
-            "/api/" in f"/{p}/" and p.endswith(".ts") for p in paths
-        )
+        has_api_module = any("/api/" in f"/{p}/" and p.endswith(".ts") for p in paths)
         has_try_catch = any("try" in c and "catch" in c for _, c in entries)
-        has_env_var = any(
-            "process.env" in c or "import.meta.env" in c for _, c in entries
+        has_env_var = any("process.env" in c or "import.meta.env" in c for _, c in entries)
+        has_loading_state = any(
+            "isloading" in c.lower() or "loading" in c.lower() for _, c in entries
         )
-        has_loading_state = any("isloading" in c.lower() or "loading" in c.lower() for _, c in entries)
         has_error_state = any(
-            "error" in c.lower() for _, c in entries
-            if any(p.endswith(".tsx") for p in paths)
+            "error" in c.lower() for _, c in entries if any(p.endswith(".tsx") for p in paths)
         )
 
         raw_endpoints = payload.get("api_endpoints_used")
-        has_api_endpoints_used = (
-            isinstance(raw_endpoints, list) and len(raw_endpoints) > 0
-        )
+        has_api_endpoints_used = isinstance(raw_endpoints, list) and len(raw_endpoints) > 0
 
         missing: list[str] = []
         if not has_api_module:
@@ -256,9 +246,7 @@ class FrontendSLMAgent(BaseSLMAgent):
 
         has_dart = any(p.endswith(".dart") for p in paths)
         has_widget_file = any(
-            (
-                "/widgets/" in f"/{p}/" or "/screens/" in f"/{p}/"
-            ) and p.endswith(".dart")
+            ("/widgets/" in f"/{p}/" or "/screens/" in f"/{p}/") and p.endswith(".dart")
             for p in paths
         )
         has_stateless = any("statelesswidget" in c.lower() for _, c in entries)
@@ -290,9 +278,7 @@ class FrontendSLMAgent(BaseSLMAgent):
         entries = self._extract_entries(payload)
         paths = [p for p, _ in entries]
 
-        has_provider = any(
-            "/providers/" in f"/{p}/" and p.endswith(".dart") for p in paths
-        )
+        has_provider = any("/providers/" in f"/{p}/" and p.endswith(".dart") for p in paths)
         has_riverpod = any("riverpod" in c.lower() for _, c in entries)
         has_http_call = any(
             "http" in c.lower() and ("get(" in c.lower() or "post(" in c.lower())
@@ -301,9 +287,7 @@ class FrontendSLMAgent(BaseSLMAgent):
         has_try_catch = any("try" in c and "catch" in c for _, c in entries)
 
         raw_endpoints = payload.get("api_endpoints_used")
-        has_api_endpoints_used = (
-            isinstance(raw_endpoints, list) and len(raw_endpoints) > 0
-        )
+        has_api_endpoints_used = isinstance(raw_endpoints, list) and len(raw_endpoints) > 0
 
         missing: list[str] = []
         if not has_provider:
@@ -325,16 +309,17 @@ class FrontendSLMAgent(BaseSLMAgent):
 
     def _validate_stage6_files(self, payload: dict[str, object]) -> None:
         entries = self._extract_entries(payload)
-        paths = [p for p, _ in entries]
 
         # React tests: .test.tsx / .test.ts or test_ prefix, under frontend
         react_test_entries = [
-            (p, c) for p, c in entries
+            (p, c)
+            for p, c in entries
             if (
                 p.endswith(".test.tsx")
                 or p.endswith(".test.ts")
                 or p.split("/")[-1].startswith("test_")
-            ) and "flutter" not in p
+            )
+            and "flutter" not in p
         ]
         has_react_tests = any(
             "test(" in c.lower() or "it(" in c.lower() or "describe(" in c.lower()
@@ -346,17 +331,11 @@ class FrontendSLMAgent(BaseSLMAgent):
         )
 
         # Flutter tests: _test.dart files under flutter/test/
-        flutter_test_entries = [
-            (p, c) for p, c in entries
-            if p.endswith("_test.dart")
-        ]
+        flutter_test_entries = [(p, c) for p, c in entries if p.endswith("_test.dart")]
         has_flutter_tests = any(
-            "testwidgets(" in c.lower() or "test(" in c.lower()
-            for _, c in flutter_test_entries
+            "testwidgets(" in c.lower() or "test(" in c.lower() for _, c in flutter_test_entries
         )
-        has_test_widgets = any(
-            "testwidgets(" in c.lower() for _, c in flutter_test_entries
-        )
+        has_test_widgets = any("testwidgets(" in c.lower() for _, c in flutter_test_entries)
 
         missing: list[str] = []
         if not has_react_tests:

@@ -1,2 +1,1 @@
 """Adapters layer package."""
-

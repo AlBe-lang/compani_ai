@@ -11,7 +11,6 @@ import json
 from typing import TYPE_CHECKING
 
 from domain.ports import StorageValue
-from observability.error_codes import ErrorCode
 from observability.logger import get_logger
 
 if TYPE_CHECKING:

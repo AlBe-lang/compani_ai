@@ -3,7 +3,7 @@
 from domain.ports import AgentPort
 
 from .backend_agent import BackendSLMAgent, BackendSLMConfig
-from .base_agent import BaseSLMAgent, SLMConfig, SLMAgentError
+from .base_agent import BaseSLMAgent, SLMAgentError, SLMConfig
 from .cto_agent import CTOAgent, CTOAgentError, CTOConfig
 
 __all__ = [

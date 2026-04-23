@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from adapters.event_bus import InProcessEventBus
 
 

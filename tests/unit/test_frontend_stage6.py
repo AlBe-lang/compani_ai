@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.base_agent import SLMAgentError
+from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -277,7 +277,9 @@ async def test_frontend_stage6_regression_stage1_still_passes() -> None:
             {
                 "name": "package.json",
                 "path": "frontend/package.json",
-                "content": json.dumps({"name": "todo-frontend", "dependencies": {"react": "^18.0.0"}}),
+                "content": json.dumps(
+                    {"name": "todo-frontend", "dependencies": {"react": "^18.0.0"}}
+                ),
                 "type": "json",
             },
             {

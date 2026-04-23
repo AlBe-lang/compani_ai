@@ -103,9 +103,7 @@ async def orchestrate_project(
     # Stage Gate 평가 — 실패율 초과 시 CTO 위임
     if stage_gate is not None:
         all_work_items = [
-            item
-            for task in tasks
-            if (item := await workspace.get_by_task_id(task.id)) is not None
+            item for task in tasks if (item := await workspace.get_by_task_id(task.id)) is not None
         ]
         gate_result = await stage_gate.evaluate(all_work_items)
         logger.info(
@@ -165,7 +163,7 @@ async def app_main(request: str | None = None) -> None:
         request = args.request
 
     if not request:
-        print("Usage: python main.py \"<project description>\"")
+        print('Usage: python main.py "<project description>"')
         return
 
     config = SystemConfig()

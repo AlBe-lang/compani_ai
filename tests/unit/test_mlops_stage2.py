@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from application.base_agent import SLMAgentError
+from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -63,7 +63,7 @@ def _stage2_response(
     if include_compose:
         compose_content = "version: '3.8'\n\nservices:\n  api:\n"
         compose_content += "    build:\n      context: .\n      dockerfile: Dockerfile\n"
-        compose_content += "    ports:\n      - \"8000:8000\"\n"
+        compose_content += '    ports:\n      - "8000:8000"\n'
         if include_env_var_ref:
             compose_content += "    environment:\n      - DATABASE_URL=${DATABASE_URL}\n"
         else:

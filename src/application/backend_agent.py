@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
 from typing import TYPE_CHECKING
 
 from domain.contracts import AgentRole
 from domain.ports import LLMProvider, MessageQueuePort, WorkSpacePort
 from observability.error_codes import ErrorCode
 
-from .base_agent import BaseSLMAgent, SLMConfig, SLMAgentError
+from .base_agent import BaseSLMAgent, SLMAgentError, SLMConfig
 
 if TYPE_CHECKING:
     from application.dna_manager import DNAManager
@@ -103,12 +102,10 @@ class BackendSLMAgent(BaseSLMAgent):
         has_database = any(path == "database.py" or path.endswith("/database.py") for path in paths)
         has_models = any("/models/" in f"/{path}/" and path.endswith(".py") for path in paths)
         has_env = any(
-            path == "alembic/env.py" or path.endswith("/alembic/env.py")
-            for path in paths
+            path == "alembic/env.py" or path.endswith("/alembic/env.py") for path in paths
         )
         has_versions = any(
-            "/alembic/versions/" in f"/{path}/" and path.endswith(".py")
-            for path in paths
+            "/alembic/versions/" in f"/{path}/" and path.endswith(".py") for path in paths
         )
 
         missing: list[str] = []
@@ -179,14 +176,15 @@ class BackendSLMAgent(BaseSLMAgent):
                 entries.append((raw_path.replace("\\", "/").strip("/"), raw_content))
 
         has_auth_mechanism = any(
-            any(kw in content.lower() for kw in _AUTH_KEYWORDS)
-            for _, content in entries
+            any(kw in content.lower() for kw in _AUTH_KEYWORDS) for _, content in entries
         )
         has_depends_injection = any("depends(" in content.lower() for _, content in entries)
 
         missing: list[str] = []
         if not has_auth_mechanism:
-            missing.append("OAuth2/JWT authentication mechanism (Bearer token / OAuth2PasswordBearer)")
+            missing.append(
+                "OAuth2/JWT authentication mechanism (Bearer token / OAuth2PasswordBearer)"
+            )
         if not has_depends_injection:
             missing.append("FastAPI Depends() injection for protected routes")
 
@@ -219,9 +217,7 @@ class BackendSLMAgent(BaseSLMAgent):
 
         # Unit tests must live under a tests/unit/ subdirectory
         unit_entries = [
-            (path, content)
-            for path, content in test_entries
-            if "/tests/unit/" in f"/{path}/"
+            (path, content) for path, content in test_entries if "/tests/unit/" in f"/{path}/"
         ]
         has_unit_tests = any("def test_" in content for _, content in unit_entries)
         has_integration_tests = any(

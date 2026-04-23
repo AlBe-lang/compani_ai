@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from adapters.redis_cache import RedisCache, _MIN_TTL_SEC
+from adapters.redis_cache import _MIN_TTL_SEC, RedisCache
 from adapters.sqlite_storage import SQLiteStorage
 
 
@@ -61,9 +61,10 @@ async def test_get_returns_none_for_missing_key(cache: RedisCache) -> None:
 
 
 async def test_set_and_get_string_value(cache: RedisCache) -> None:
-    await cache.set("str_key", "hello")
+    # StorageValue is dict[str, object]; wrap the string accordingly.
+    await cache.set("str_key", {"value": "hello"})
     result = await cache.get("str_key")
-    assert result == "hello"
+    assert result == {"value": "hello"}
 
 
 async def test_set_enforces_minimum_ttl(cache: RedisCache, storage: SQLiteStorage) -> None:
@@ -72,7 +73,7 @@ async def test_set_enforces_minimum_ttl(cache: RedisCache, storage: SQLiteStorag
 
 
 async def test_delete_does_not_raise_when_unavailable(cache: RedisCache) -> None:
-    await cache.set("del_key", "to be deleted")
+    await cache.set("del_key", {"note": "to be deleted"})
     await cache.delete("del_key")  # must not raise
 
 

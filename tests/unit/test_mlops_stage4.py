@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from application.base_agent import SLMAgentError
+from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -34,7 +34,7 @@ def _stage3_base_files() -> list[dict[str, str]]:
                 "WORKDIR /app\n"
                 "RUN pip install --no-cache-dir flask\n"
                 "RUN useradd -m appuser\nUSER appuser\n"
-                "EXPOSE 8000\nCMD [\"python\", \"app.py\"]\n"
+                'EXPOSE 8000\nCMD ["python", "app.py"]\n'
             ),
             "type": "dockerfile",
         },
@@ -141,7 +141,7 @@ def _stage4_response(
             script_content += "set -euo pipefail\n\n"
         if include_info_prefix:
             script_content += 'echo "[INFO] Starting deployment..."\n\n'
-            script_content += 'if ! command -v docker &>/dev/null; then\n'
+            script_content += "if ! command -v docker &>/dev/null; then\n"
             script_content += '    echo "[ERROR] Docker is not installed." >&2\n'
             script_content += "    exit 1\nfi\n\n"
             script_content += 'echo "[INFO] Building Docker image..."\n'
@@ -318,7 +318,7 @@ async def test_mlops_stage4_regression_stage1_still_passes() -> None:
                     "WORKDIR /app\n"
                     "RUN pip install --no-cache-dir flask\n"
                     "RUN useradd -m appuser\nUSER appuser\n"
-                    "EXPOSE 8000\nCMD [\"python\", \"app.py\"]\n"
+                    'EXPOSE 8000\nCMD ["python", "app.py"]\n'
                 ),
                 "type": "dockerfile",
             },

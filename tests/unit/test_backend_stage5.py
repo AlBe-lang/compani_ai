@@ -61,10 +61,7 @@ def _stage4_base_files() -> list[dict[str, str]]:
         {
             "name": "base_router.py",
             "path": "backend/routers/base_router.py",
-            "content": (
-                "from fastapi import APIRouter, HTTPException\n"
-                "router = APIRouter()\n"
-            ),
+            "content": ("from fastapi import APIRouter, HTTPException\n" "router = APIRouter()\n"),
             "type": "python",
         },
         # Stage 4: JWT auth mechanism + Depends injection

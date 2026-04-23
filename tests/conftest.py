@@ -27,4 +27,3 @@ def mock_queue() -> MockMessageQueue:
 @pytest.fixture
 def temp_db_path(tmp_path: Path) -> Path:
     return tmp_path / "workspace.db"
-

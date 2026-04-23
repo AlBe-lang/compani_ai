@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from application.base_agent import SLMAgentError
+from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -77,7 +77,7 @@ def _stage3_response(
     files = list(_stage2_base_files())
 
     if use_github_actions:
-        ci_content = "name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n\njobs:\n"
+        ci_content = "name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n\njobs:\n"  # noqa: E501
         if include_lint_job:
             ci_content += (
                 "  lint:\n"
@@ -92,8 +92,7 @@ def _stage3_response(
             if include_pip_cache:
                 ci_content += "          cache: 'pip'\n"
             ci_content += (
-                "      - name: Lint\n"
-                "        run: black --check . && flake8 . && mypy .\n"
+                "      - name: Lint\n" "        run: black --check . && flake8 . && mypy .\n"
             )
         if include_test_job:
             ci_content += (
@@ -195,9 +194,7 @@ async def test_mlops_stage3_success_with_github_actions() -> None:
 
 @pytest.mark.asyncio
 async def test_mlops_stage3_success_with_gitlab_ci() -> None:
-    llm = MockLLMProvider(
-        response=_stage3_response(use_github_actions=False, use_gitlab_ci=True)
-    )
+    llm = MockLLMProvider(response=_stage3_response(use_github_actions=False, use_gitlab_ci=True))
     agent = MLOpsSLMAgent(
         llm=llm,
         workspace=MockWorkSpace(),

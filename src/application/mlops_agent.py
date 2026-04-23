@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
 from typing import TYPE_CHECKING
 
 from domain.contracts import AgentRole
@@ -141,18 +140,14 @@ class MLOpsSLMAgent(BaseSLMAgent):
         entries = self._extract_entries(payload)
         paths = [p for p, _ in entries]
 
-        has_dockerfile = any(
-            p == "Dockerfile" or p.endswith("/Dockerfile") for p in paths
-        )
+        has_dockerfile = any(p == "Dockerfile" or p.endswith("/Dockerfile") for p in paths)
         all_content = " ".join(c for _, c in entries)
 
         has_from = "from " in all_content.lower()
         has_workdir = "workdir" in all_content.lower()
         has_non_root_user = "user " in all_content.lower()
         has_no_cache = "--no-cache-dir" in all_content
-        has_dockerignore = any(
-            p == ".dockerignore" or p.endswith("/.dockerignore") for p in paths
-        )
+        has_dockerignore = any(p == ".dockerignore" or p.endswith("/.dockerignore") for p in paths)
 
         missing: list[str] = []
         if not has_dockerfile:
@@ -179,11 +174,11 @@ class MLOpsSLMAgent(BaseSLMAgent):
         paths = [p for p, _ in entries]
 
         has_compose = any(
-            "docker-compose" in p and (p.endswith(".yml") or p.endswith(".yaml"))
-            for p in paths
+            "docker-compose" in p and (p.endswith(".yml") or p.endswith(".yaml")) for p in paths
         )
         compose_content = " ".join(
-            c for p, c in entries
+            c
+            for p, c in entries
             if "docker-compose" in p and (p.endswith(".yml") or p.endswith(".yaml"))
         )
 
@@ -216,14 +211,14 @@ class MLOpsSLMAgent(BaseSLMAgent):
 
         # Accept GitHub Actions OR GitLab CI
         has_github_actions = any(
-            ".github/workflows/" in p and (p.endswith(".yml") or p.endswith(".yaml"))
-            for p in paths
+            ".github/workflows/" in p and (p.endswith(".yml") or p.endswith(".yaml")) for p in paths
         )
         has_gitlab_ci = any(p == ".gitlab-ci.yml" or p.endswith("/.gitlab-ci.yml") for p in paths)
         has_ci_pipeline = has_github_actions or has_gitlab_ci
 
         ci_content = " ".join(
-            c for p, c in entries
+            c
+            for p, c in entries
             if (
                 ".github/workflows/" in p
                 or p.endswith(".gitlab-ci.yml")
@@ -259,26 +254,21 @@ class MLOpsSLMAgent(BaseSLMAgent):
         paths = [p for p, _ in entries]
 
         has_prometheus = any(
-            "prometheus" in p and (p.endswith(".yml") or p.endswith(".yaml"))
-            for p in paths
+            "prometheus" in p and (p.endswith(".yml") or p.endswith(".yaml")) for p in paths
         )
         prometheus_content = " ".join(
-            c for p, c in entries
+            c
+            for p, c in entries
             if "prometheus" in p and (p.endswith(".yml") or p.endswith(".yaml"))
         )
         has_scrape_configs = "scrape_configs" in prometheus_content
 
-        has_env_example = any(
-            p == ".env.example" or p.endswith("/.env.example") for p in paths
-        )
+        has_env_example = any(p == ".env.example" or p.endswith("/.env.example") for p in paths)
 
         has_deploy_script = any(
-            (p.endswith(".sh") and ("deploy" in p or "run" in p or "setup" in p))
-            for p in paths
+            (p.endswith(".sh") and ("deploy" in p or "run" in p or "setup" in p)) for p in paths
         )
-        deploy_content = " ".join(
-            c for p, c in entries if p.endswith(".sh")
-        )
+        deploy_content = " ".join(c for p, c in entries if p.endswith(".sh"))
         has_set_e = "set -euo pipefail" in deploy_content or "set -e" in deploy_content
         has_info_prefix = "[info]" in deploy_content.lower() or "[error]" in deploy_content.lower()
 

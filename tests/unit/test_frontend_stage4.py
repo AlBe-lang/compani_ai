@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.base_agent import SLMAgentError
+from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -230,8 +230,12 @@ async def test_frontend_stage4_retry_when_pubspec_missing_then_success() -> None
 async def test_frontend_stage4_fails_after_exhausting_retries() -> None:
     llm = MockLLMProvider(
         responses=[
-            _stage4_response(include_dart=False, include_widget_file=False, include_main_dart=False),
-            _stage4_response(include_dart=False, include_widget_file=False, include_main_dart=False),
+            _stage4_response(
+                include_dart=False, include_widget_file=False, include_main_dart=False
+            ),
+            _stage4_response(
+                include_dart=False, include_widget_file=False, include_main_dart=False
+            ),
         ]
     )
     agent = FrontendSLMAgent(
@@ -258,7 +262,7 @@ async def test_frontend_stage4_rejects_react_framework() -> None:
             {
                 "name": "TodoItem.tsx",
                 "path": "frontend/src/components/TodoItem.tsx",
-                "content": "interface Props { title: string; }\nconst TodoItem = ({ title }: Props) => <div>{title}</div>;",
+                "content": "interface Props { title: string; }\nconst TodoItem = ({ title }: Props) => <div>{title}</div>;",  # noqa: E501
                 "type": "tsx",
             }
         ],

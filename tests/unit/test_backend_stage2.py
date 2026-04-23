@@ -153,4 +153,3 @@ def test_backend_stage2_invalid_stage_raises_system_config() -> None:
         )
 
     assert exc_info.value.code is ErrorCode.E_SYSTEM_CONFIG
-

@@ -9,7 +9,9 @@ from adapters.ollama_provider import OllamaProvider
 from observability.error_codes import ErrorCode
 
 
-def _make_mock_session(status: int = 200, json_body: object = None, text_body: str = "") -> MagicMock:
+def _make_mock_session(
+    status: int = 200, json_body: object = None, text_body: str = ""
+) -> MagicMock:
     mock_resp = MagicMock()
     mock_resp.status = status
     mock_resp.json = AsyncMock(return_value=json_body or {})

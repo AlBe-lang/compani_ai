@@ -12,7 +12,6 @@ from adapters.mock_workspace import MockWorkSpace
 from application.cto_agent import CTOAgent, CTOConfig
 from domain.contracts import Message, MessageStatus, MessageType
 
-
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------

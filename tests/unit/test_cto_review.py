@@ -54,7 +54,7 @@ async def test_review_progress_replan_excludes_done_tasks() -> None:
                 '{"tasks":['
                 '{"id":"frontend-ui","title":"Build UI","description":"UI","agent_role":"frontend",'
                 '"dependencies":["backend-api"],"priority":2},'
-                '{"id":"backend-api","title":"Build API","description":"API","agent_role":"backend",'
+                '{"id":"backend-api","title":"Build API","description":"API","agent_role":"backend",'  # noqa: E501
                 '"dependencies":[],"priority":1},'
                 '{"id":"mlops-ci","title":"Setup CI","description":"CI","agent_role":"mlops",'
                 '"dependencies":["backend-api"],"priority":3}'

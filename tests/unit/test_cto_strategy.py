@@ -16,7 +16,7 @@ from observability.logger import configure_logging
 async def test_create_strategy_returns_strategy_from_valid_json() -> None:
     llm = MockLLMProvider(
         response=(
-            '```json\n'
+            "```json\n"
             '{"project_name":"Todo","description":"Task app","tech_stack":["FastAPI"],'
             '"constraints":["local only"]}\n'
             "```"
@@ -43,7 +43,7 @@ async def test_create_strategy_retries_after_parse_error() -> None:
         responses=[
             "this is not json",
             (
-                '```json\n'
+                "```json\n"
                 '{"project_name":"Blog","description":"Blog app","tech_stack":["React"],'
                 '"constraints":["single machine"]}\n'
                 "```"
@@ -152,7 +152,10 @@ async def test_create_strategy_logs_include_run_id_and_agent_id(
 
     assert any(payload.get("run_id") == run_id for payload in payloads)
     assert any(payload.get("agent_id") == "cto" for payload in payloads)
-    assert any(payload.get("event") == "cto.strategy.done" and payload.get("task_count") == 0 for payload in payloads)
+    assert any(
+        payload.get("event") == "cto.strategy.done" and payload.get("task_count") == 0
+        for payload in payloads
+    )
     assert any(
         payload.get("event") == "cto.strategy.done"
         and isinstance(payload.get("response_chars"), int)

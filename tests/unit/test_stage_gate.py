@@ -8,10 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application.stage_gate import GateConfig, GateResult, GateVerdict, StageGateMeeting
+from application.stage_gate import GateConfig, GateVerdict, StageGateMeeting
 from domain.contracts import ReviewDecision, WorkItem, WorkStatus
 from domain.contracts.review_result import ReviewResult
-
 
 # ------------------------------------------------------------------
 # Helpers
@@ -41,11 +40,11 @@ def _make_work_item(
     )
 
 
-def _make_cto(decision: ReviewDecision = ReviewDecision.REPLAN, reason: str = "needs rework") -> MagicMock:
+def _make_cto(
+    decision: ReviewDecision = ReviewDecision.REPLAN, reason: str = "needs rework"
+) -> MagicMock:
     cto = MagicMock()
-    cto.review_progress = AsyncMock(
-        return_value=ReviewResult(decision=decision, reason=reason)
-    )
+    cto.review_progress = AsyncMock(return_value=ReviewResult(decision=decision, reason=reason))
     return cto
 
 
@@ -225,7 +224,7 @@ async def test_evaluate_fail_persists_delegated_result() -> None:
 
 async def test_evaluate_emergency_returns_replan() -> None:
     gate, storage, _ = _make_gate()
-    payload = {"item_id": "wi_blocked", "agent_id": "backend"}
+    payload: dict[str, object] = {"item_id": "wi_blocked", "agent_id": "backend"}
     result = await gate.evaluate_emergency(payload)
     assert result.verdict is GateVerdict.REPLAN
     assert result.failure_rate == 1.0
@@ -234,7 +233,7 @@ async def test_evaluate_emergency_returns_replan() -> None:
 
 async def test_evaluate_emergency_persists_result() -> None:
     gate, storage, _ = _make_gate()
-    payload = {"item_id": "wi_blocked", "agent_id": "frontend"}
+    payload: dict[str, object] = {"item_id": "wi_blocked", "agent_id": "frontend"}
     await gate.evaluate_emergency(payload)
     assert storage.save.called
 
@@ -254,16 +253,16 @@ def test_constructor_subscribes_to_blocking_detected() -> None:
 
 def test_blocking_detected_appends_to_list() -> None:
     gate, _, _ = _make_gate()
-    payload = {"item_id": "wi_x", "agent_id": "mlops"}
+    payload: dict[str, object] = {"item_id": "wi_x", "agent_id": "mlops"}
     # Call handler directly (no running loop)
-    gate._on_blocking_detected(payload)
+    gate._on_blocking_detected("blocking.detected", payload)
     assert payload in gate._blocking_items
 
 
 async def test_blocking_detected_creates_emergency_task() -> None:
     gate, storage, _ = _make_gate()
-    payload = {"item_id": "wi_x", "agent_id": "mlops"}
-    gate._on_blocking_detected(payload)
+    payload: dict[str, object] = {"item_id": "wi_x", "agent_id": "mlops"}
+    gate._on_blocking_detected("blocking.detected", payload)
     # Allow event loop to run the created task
     await asyncio.sleep(0)
     assert storage.save.called

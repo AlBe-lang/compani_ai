@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.base_agent import SLMAgentError
+from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -41,13 +41,13 @@ def _stage1_response(
                 "content": (
                     "import React from 'react';\n\n"
                     + (
-                        "interface TodoItemProps {\n  id: number;\n  title: string;\n  done: boolean;\n}\n\n"
+                        "interface TodoItemProps {\n  id: number;\n  title: string;\n  done: boolean;\n}\n\n"  # noqa: E501
                         if include_props_interface
                         else "// no type definitions\n\n"
                     )
                     + "const TodoItem = ({ id, title, done }: TodoItemProps) => {\n"
                     "  return (\n"
-                    "    <div className=\"todo-item\">\n"
+                    '    <div className="todo-item">\n'
                     "      <span>{title}</span>\n"
                     "    </div>\n"
                     "  );\n"

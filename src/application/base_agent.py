@@ -7,6 +7,9 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+
+# DNAManager는 TYPE_CHECKING 시점에만 임포트 (순환 참조 방지)
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -17,8 +20,6 @@ from observability.error_codes import ErrorCode
 from observability.logger import get_logger
 from observability.parsers import ParseResponseError, parse_json_response
 
-# DNAManager는 TYPE_CHECKING 시점에만 임포트 (순환 참조 방지)
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from application.dna_manager import DNAManager
 
@@ -99,6 +100,7 @@ class BaseSLMAgent(ABC):
         self._validate_task_role(task)
         work_item_id: str | None = None
         import time as _time
+
         t_start = _time.monotonic()
 
         # DNA 로드 → temperature + 시스템 프롬프트 modifier 적용
@@ -140,8 +142,12 @@ class BaseSLMAgent(ABC):
             if self._dna_manager is not None and dna is not None:
                 duration = _time.monotonic() - t_start
                 failure_result = TaskResult(
-                    task_id=task.id, agent_id=self._agent_id,
-                    approach="failed", code="", success=False, error_code=exc.code,
+                    task_id=task.id,
+                    agent_id=self._agent_id,
+                    approach="failed",
+                    code="",
+                    success=False,
+                    error_code=exc.code,
                 )
                 await self._dna_manager.update(dna, failure_result, duration_sec=duration)
             self._logger.error(
@@ -296,9 +302,7 @@ class BaseSLMAgent(ABC):
         attempt: int,
     ) -> str:
         temperature = (
-            self._dna_temperature
-            if self._dna_temperature is not None
-            else self._config.temperature
+            self._dna_temperature if self._dna_temperature is not None else self._config.temperature
         )
         self._logger.info(
             "slm.llm.call",

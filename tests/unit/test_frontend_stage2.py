@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from application.base_agent import SLMAgentError
+from application.frontend_agent import FrontendSLMAgent, FrontendSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -72,10 +72,7 @@ def _stage2_response(
             + "  return { todos, setTodos };\n};\n"
         )
     else:
-        hook_content = (
-            "// hook with no state\n"
-            "export const useTodos = () => ({ todos: [] });\n"
-        )
+        hook_content = "// hook with no state\n" "export const useTodos = () => ({ todos: [] });\n"
 
     if include_custom_hook:
         files.append(

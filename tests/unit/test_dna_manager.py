@@ -6,17 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application.dna_manager import DNAManager, _EMA_ALPHA, _SPEED_REF_SEC
+from application.dna_manager import _EMA_ALPHA, _SPEED_REF_SEC, DNAManager
 from domain.contracts import AgentDNA, TaskResult
 from domain.contracts.error_codes import ErrorCode
-
 
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------
 
 
-def _make_storage(existing_data: dict | None = None) -> MagicMock:
+def _make_storage(existing_data: dict[str, object] | None = None) -> MagicMock:
     mock = MagicMock()
     mock.load = AsyncMock(return_value=existing_data)
     mock.save = AsyncMock()
@@ -29,6 +28,7 @@ def _make_result(
     error_code: ErrorCode | None = None,
 ) -> TaskResult:
     from domain.contracts import FileInfo
+
     files = [
         FileInfo(name=f"f{i}.py", path=f"src/f{i}.py", content="", type="python")
         for i in range(file_count)
@@ -74,7 +74,7 @@ async def test_load_uses_cache_on_second_call(manager: DNAManager) -> None:
     await manager.load("backend", "backend")
     await manager.load("backend", "backend")
     # storage.load should be called only once (second hit is from cache)
-    assert manager._storage.load.call_count == 1
+    assert manager._storage.load.call_count == 1  # type: ignore[attr-defined]
 
 
 # ------------------------------------------------------------------
@@ -153,7 +153,7 @@ async def test_update_speed_gene_fast_task(manager: DNAManager) -> None:
 async def test_update_persists_to_storage(manager: DNAManager) -> None:
     dna = await manager.load("backend", "backend")
     await manager.update(dna, _make_result(), duration_sec=5.0)
-    assert manager._storage.save.called
+    assert manager._storage.save.called  # type: ignore[attr-defined]
 
 
 # ------------------------------------------------------------------
@@ -175,7 +175,8 @@ def test_prompt_modifier_precision_above_threshold(manager: DNAManager) -> None:
 
 def test_prompt_modifier_multiple_active_genes(manager: DNAManager) -> None:
     dna = AgentDNA(
-        agent_id="x", role="backend",
+        agent_id="x",
+        role="backend",
         genes={"precision": 0.9, "code_quality": 0.9},
     )
     modifier = manager.to_system_prompt_modifier(dna)

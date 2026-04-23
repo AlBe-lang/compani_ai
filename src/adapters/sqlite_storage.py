@@ -93,7 +93,9 @@ class SQLiteStorage:
 
     def _require_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
-            raise AdapterError(ErrorCode.E_STORAGE_READ, "SQLiteStorage not initialized — call init() first")
+            raise AdapterError(
+                ErrorCode.E_STORAGE_READ, "SQLiteStorage not initialized — call init() first"
+            )
         return self._conn
 
     async def _run_migrations(self) -> None:

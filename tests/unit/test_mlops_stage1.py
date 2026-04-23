@@ -7,8 +7,8 @@ import pytest
 from adapters.mock_llm_provider import MockLLMProvider
 from adapters.mock_message_queue import MockMessageQueue
 from adapters.mock_workspace import MockWorkSpace
-from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from application.base_agent import SLMAgentError
+from application.mlops_agent import MLOpsSLMAgent, MLOpsSLMConfig
 from domain.contracts import AgentRole, Task
 from observability.error_codes import ErrorCode
 
@@ -227,7 +227,7 @@ async def test_mlops_stage1_fails_when_env_vars_required_missing() -> None:
             {
                 "name": "Dockerfile",
                 "path": "Dockerfile",
-                "content": "FROM python:3.10-slim\nWORKDIR /app\nUSER nobody\nRUN pip install --no-cache-dir flask\n",
+                "content": "FROM python:3.10-slim\nWORKDIR /app\nUSER nobody\nRUN pip install --no-cache-dir flask\n",  # noqa: E501
                 "type": "dockerfile",
             },
             {

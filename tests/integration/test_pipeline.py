@@ -70,7 +70,7 @@ _BACKEND_RESULT = json.dumps(
             {
                 "name": "main.py",
                 "path": "backend/main.py",
-                "content": "from fastapi import FastAPI\napp = FastAPI()\n\n@app.get('/todos')\ndef list_todos(): return []",
+                "content": "from fastapi import FastAPI\napp = FastAPI()\n\n@app.get('/todos')\ndef list_todos(): return []",  # noqa: E501
                 "type": "python",
             }
         ],
@@ -99,7 +99,7 @@ _FRONTEND_RESULT = json.dumps(
             {
                 "name": "package.json",
                 "path": "package.json",
-                "content": '{"name":"todo-app","dependencies":{"react":"^18.0.0","react-dom":"^18.0.0"}}',
+                "content": '{"name":"todo-app","dependencies":{"react":"^18.0.0","react-dom":"^18.0.0"}}',  # noqa: E501
                 "type": "json",
             },
             {
@@ -131,7 +131,7 @@ _MLOPS_RESULT = json.dumps(
                     "RUN pip install --no-cache-dir -r requirements.txt\n"
                     "COPY . .\n"
                     "USER nobody\n"
-                    "CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\"]\n"
+                    'CMD ["uvicorn", "main:app", "--host", "0.0.0.0"]\n'
                 ),
                 "type": "dockerfile",
             },
@@ -190,13 +190,15 @@ async def test_all_tasks_execute_successfully(
     tmp_path: Path,
 ) -> None:
     workspace, queue, _ = infra
-    llm = MockLLMProvider(responses=[
-        _STRATEGY,
-        _DECOMPOSE,
-        _BACKEND_RESULT,
-        _FRONTEND_RESULT,
-        _MLOPS_RESULT,
-    ])
+    llm = MockLLMProvider(
+        responses=[
+            _STRATEGY,
+            _DECOMPOSE,
+            _BACKEND_RESULT,
+            _FRONTEND_RESULT,
+            _MLOPS_RESULT,
+        ]
+    )
     config = SystemConfig(run_id="integ-02", output_dir=tmp_path)
     factory = AgentFactory(config=config, llm=llm, workspace=workspace, queue=queue)
 
@@ -210,9 +212,7 @@ async def test_all_tasks_execute_successfully(
     strategy = await cto.create_strategy("Build a simple todo app")
     tasks = await cto.decompose_tasks(strategy)
 
-    results = await asyncio.gather(
-        *[team[t.agent_role.value].execute_task(t) for t in tasks]
-    )
+    results = await asyncio.gather(*[team[t.agent_role.value].execute_task(t) for t in tasks])
 
     assert all(r.success for r in results)
     # 1 backend file + 3 frontend files (tsx, package.json, tsconfig.json) + 2 mlops files
@@ -224,13 +224,15 @@ async def test_file_storage_writes_output(
     tmp_path: Path,
 ) -> None:
     workspace, queue, _ = infra
-    llm = MockLLMProvider(responses=[
-        _STRATEGY,
-        _DECOMPOSE,
-        _BACKEND_RESULT,
-        _FRONTEND_RESULT,
-        _MLOPS_RESULT,
-    ])
+    llm = MockLLMProvider(
+        responses=[
+            _STRATEGY,
+            _DECOMPOSE,
+            _BACKEND_RESULT,
+            _FRONTEND_RESULT,
+            _MLOPS_RESULT,
+        ]
+    )
     config = SystemConfig(run_id="integ-03", output_dir=tmp_path)
     factory = AgentFactory(config=config, llm=llm, workspace=workspace, queue=queue)
 
@@ -243,9 +245,7 @@ async def test_file_storage_writes_output(
 
     strategy = await cto.create_strategy("Build a simple todo app")
     tasks = await cto.decompose_tasks(strategy)
-    results = list(await asyncio.gather(
-        *[team[t.agent_role.value].execute_task(t) for t in tasks]
-    ))
+    results = list(await asyncio.gather(*[team[t.agent_role.value].execute_task(t) for t in tasks]))
 
     fs = FileStorage()
     project_dir = fs.save_result_files(
