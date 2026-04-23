@@ -6,9 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application.knowledge_graph import KnowledgeGraph, _EMA_ALPHA
+from application.knowledge_graph import _EMA_ALPHA, KnowledgeGraph
 from domain.contracts import TaskResult
-
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -92,7 +91,9 @@ async def test_ema_formula_is_correct(kg: KnowledgeGraph) -> None:
 
 async def test_store_task_result_updates_ema(kg: KnowledgeGraph) -> None:
     # Use approach text that clearly maps to mlops (multiple keyword matches)
-    result = _make_task_result("mlops_agent", "Deploy Kubernetes pipeline with compose", success=True)
+    result = _make_task_result(
+        "mlops_agent", "Deploy Kubernetes pipeline with compose", success=True
+    )
     await kg.store_task_result(result, run_id="run_001")
     level = await kg.get_expertise_level("mlops", "mlops")
     assert level > 0.5
@@ -168,3 +169,50 @@ async def test_find_best_responder_returns_none_when_no_history_and_no_keywords(
 async def test_get_expertise_level_returns_neutral_for_unknown(kg: KnowledgeGraph) -> None:
     level = await kg.get_expertise_level("unknown_role", "unknown_topic")
     assert level == 0.5
+
+
+# ------------------------------------------------------------------
+# R-04 regression: whole-word keyword matching (no substring false positives)
+# ------------------------------------------------------------------
+
+
+async def test_keyword_route_does_not_match_api_inside_apiary(kg: KnowledgeGraph) -> None:
+    """Regression for R-04: 'apiary' must not match backend keyword 'api'."""
+    role = await kg.find_best_responder("apiary farming guide")
+    assert role is None
+
+
+async def test_keyword_route_does_not_match_react_inside_reactor(kg: KnowledgeGraph) -> None:
+    """Regression for R-04: 'reactor' must not match frontend keyword 'react'."""
+    role = await kg.find_best_responder("studying nuclear reactors")
+    assert role is None
+
+
+async def test_keyword_route_does_not_match_ci_inside_decide(kg: KnowledgeGraph) -> None:
+    """Regression for R-04: substring 'ci' in 'decide' must not route to mlops."""
+    role = await kg.find_best_responder("help me decide on a framework")
+    assert role is None
+
+
+async def test_keyword_route_matches_whole_words_case_insensitive(kg: KnowledgeGraph) -> None:
+    """Whole-word + case insensitivity still works after the regex migration."""
+    role = await kg.find_best_responder("Design the DATABASE Schema for our Migration")
+    assert role == "backend"
+
+
+async def test_keyword_route_nfc_nfd_equivalence(kg: KnowledgeGraph) -> None:
+    """NFC and NFD forms of the same Korean text must route identically (both None)."""
+    import unicodedata
+
+    text_nfc = unicodedata.normalize("NFC", "데이터베이스 스키마")
+    text_nfd = unicodedata.normalize("NFD", "데이터베이스 스키마")
+    role_nfc = await kg.find_best_responder(text_nfc)
+    role_nfd = await kg.find_best_responder(text_nfd)
+    assert role_nfc == role_nfd  # both None; invariant under normalization
+
+
+async def test_keyword_route_multiple_matches_scored_correctly(kg: KnowledgeGraph) -> None:
+    """Scores count each whole-word occurrence; best role wins."""
+    # Two mlops words (docker, compose), one backend word (api)
+    role = await kg.find_best_responder("Run docker compose for the api container")
+    assert role == "mlops"

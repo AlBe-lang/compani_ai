@@ -12,11 +12,12 @@ Routing priority:
 
 from __future__ import annotations
 
-from domain.contracts import TaskResult
-from domain.ports import KnowledgeGraphPort
-from observability.logger import get_logger
+import re
+import unicodedata
 
 from adapters.qdrant_storage import QARecord, QdrantStorage
+from domain.contracts import TaskResult
+from observability.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -24,12 +25,37 @@ _EMA_ALPHA = 0.2  # Rule 10: EMA instead of simple replacement
 _MIN_HITS_FOR_ROUTING = 2  # minimum matching records before trusting KnowledgeGraph
 _SIMILARITY_THRESHOLD = 0.65  # minimum cosine similarity to consider a result useful
 
-# Keyword fallback routing table (from SYSTEM_ARCHITECTURE.md §4.5)
+# Keyword fallback routing table (from SYSTEM_ARCHITECTURE.md §4.5).
+# R-04 (Stage 4): matched with whole-word boundaries, not substring — prevents
+# false positives like "apiary" → api or "reactor" → react. Korean queries are
+# intentionally not routed by keyword; they fall through to semantic search
+# (multilingual embedding, R-05) and finally to the CTO fallback.
 _KEYWORD_ROUTING: dict[str, list[str]] = {
     "backend": ["api", "database", "sql", "endpoint", "schema", "model", "migration", "fastapi"],
     "frontend": ["ui", "component", "css", "react", "flutter", "widget", "style", "render"],
     "mlops": ["deploy", "docker", "dockerfile", "compose", "ci", "pipeline", "kubernetes"],
 }
+
+
+def _compile_keyword_patterns(
+    routing: dict[str, list[str]],
+) -> dict[str, re.Pattern[str]]:
+    """Pre-compile one whole-word regex per role for O(1) lookup per call."""
+    return {
+        role: re.compile(
+            r"\b(?:" + "|".join(re.escape(kw) for kw in keywords) + r")\b",
+            re.IGNORECASE,
+        )
+        for role, keywords in routing.items()
+    }
+
+
+_KEYWORD_PATTERNS: dict[str, re.Pattern[str]] = _compile_keyword_patterns(_KEYWORD_ROUTING)
+
+
+def _normalize(text: str) -> str:
+    """NFC-normalize input so NFD-encoded Korean (or other) text matches consistently."""
+    return unicodedata.normalize("NFC", text)
 
 
 class KnowledgeGraph:
@@ -183,23 +209,23 @@ class KnowledgeGraph:
         return self._expertise.get(role, {}).get(topic, 0.5)  # neutral default
 
     def _detect_topic(self, text: str) -> str:
-        """Detect primary topic from text using keyword matching."""
-        lower = text.lower()
+        """Detect primary topic from text using whole-word keyword matching."""
+        normalized = _normalize(text)
         best_role = "general"
         best_count = 0
-        for role, keywords in _KEYWORD_ROUTING.items():
-            count = sum(1 for kw in keywords if kw in lower)
+        for role, pattern in _KEYWORD_PATTERNS.items():
+            count = len(pattern.findall(normalized))
             if count > best_count:
                 best_count = count
                 best_role = role
         return best_role
 
     def _keyword_route(self, question: str) -> str | None:
-        """Deterministic keyword-based routing (fallback path)."""
-        lower = question.lower()
-        scores: dict[str, int] = {}
-        for role, keywords in _KEYWORD_ROUTING.items():
-            scores[role] = sum(1 for kw in keywords if kw in lower)
+        """Deterministic keyword-based routing (fallback path, whole-word match)."""
+        normalized = _normalize(question)
+        scores: dict[str, int] = {
+            role: len(pattern.findall(normalized)) for role, pattern in _KEYWORD_PATTERNS.items()
+        }
         best_role = max(scores, key=lambda r: scores[r])
         return best_role if scores[best_role] > 0 else None
 
