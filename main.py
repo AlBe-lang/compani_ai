@@ -296,7 +296,12 @@ async def _run_dashboard_server() -> None:
     workspace = SharedWorkspace(storage=storage, event_bus=bus)
     dna_manager = DNAManager(storage=storage)
     metrics = MetricsCollector()
-    factory = AgentFactory(config=config, llm=None, workspace=workspace, queue=None)  # type: ignore[arg-type]
+    factory = AgentFactory(
+        config=config,
+        llm=None,  # type: ignore[arg-type]
+        workspace=workspace,
+        queue=None,  # type: ignore[arg-type]
+    )
     limiter = factory.create_concurrency_limiter()
 
     import uuid as _uuid
