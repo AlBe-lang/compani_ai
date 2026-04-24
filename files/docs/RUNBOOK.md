@@ -30,10 +30,15 @@
 
 **대응**:
 ```bash
-ollama pull llama3.1:8b
-ollama pull gemma4:e4b
-ollama pull llama3.2:3b
+ollama pull qwen3:8b       # CTO (Part 8 Stage 3 기본값, ~5GB)
+ollama pull gemma4:e4b     # Backend/Frontend SLM (~9.6GB)
+ollama pull llama3.2:3b    # MLOps SLM (~2GB)
 ```
+
+총 다운로드 ~17GB. 최초 1회 30~60분 소요(네트워크 속도 기준).
+
+**참고**: 더 강력한 GPU 환경(윈도우 RTX / 랩 서버)에선 Part 8 Stage 3의
+`HardwareProfile` 프리셋으로 더 큰 모델 교체 가능 (예: `qwen3:14b`, `qwen3.5:35b`).
 
 ---
 

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from application.dna_manager import DNAManager
     from observability.metrics import MetricsCollector
 
-_DEFAULT_CTO_MODEL = "llama3.1:8b"
+_DEFAULT_CTO_MODEL = "qwen3:8b"
 _DEFAULT_SLM_MODEL = "gemma4:e4b"
 _DEFAULT_MLOPS_MODEL = "llama3.2:3b"
 

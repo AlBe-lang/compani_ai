@@ -73,7 +73,7 @@ class EmergencyMeetingConfig:
     response_timeout_sec: float = _DEFAULT_RESPONSE_TIMEOUT_SEC
     cto_max_retries: int = _DEFAULT_CTO_MAX_RETRIES
     cto_retry_interval_sec: float = _DEFAULT_CTO_RETRY_INTERVAL_SEC
-    cto_model: str = "llama3.1:8b"
+    cto_model: str = "qwen3:8b"
 
 
 class EmergencyMeeting:

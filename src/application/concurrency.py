@@ -5,10 +5,10 @@ M4 16GB (주 환경) 에서 동시 모델 메모리 합계가 swap 임계값을 
 참조: 04_INFRASTRUCTURE_RULES.md I-04 ("동시에 2개 이상 큰 모델 금지"),
       04_SYSTEM_ARCHITECTURE.md §7.3 전략 1 (모델 순차 로드).
 
-기본값 근거 (Mac Mini 16GB, llama3.1:8b + gemma4:e4b 기준):
-  CTO 8B        ≈ 4.7GB
-  SLM gemma4:e4b ≈ 9.6GB
-  합계           ≈ 14.3GB  (OS + Python 1.5GB 포함 15.8GB, swap 직전)
+기본값 근거 (Mac Mini 16GB, qwen3:8b + gemma4:e4b 기준 — Part 8 Stage 3):
+  CTO qwen3:8b   ≈ 5.0GB  (Q4 양자화)
+  SLM gemma4:e4b ≈ 9.6GB  (MatFormer effective 4B)
+  합계           ≈ 14.6GB  (OS + Python 1.5GB 포함 16.1GB, swap 직전)
   → 동시 2개 모델까지만 허용 (CTO + 1 SLM). 2 SLM 병렬은 swap 확정.
 
 32GB+ 데스크탑 환경에선 SystemConfig 필드를 상향 조정해 2 SLM 병렬 가능.
