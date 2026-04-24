@@ -187,6 +187,13 @@ class SystemConfig:
     cto_model: str = _DEFAULT_CTO_MODEL
     slm_model: str = _DEFAULT_SLM_MODEL
     mlops_model: str = _DEFAULT_MLOPS_MODEL
+    # Part 8 Stage 3 — CTO LLM call timeouts (seconds). Defaults match the
+    # cto_agent DEFAULT_* constants and are sized for a 16GB M-series laptop
+    # where memory swap dominates response time. Restart-required because
+    # CTOConfig captures the value at agent-creation time.
+    cto_strategy_timeout_sec: int = 180
+    cto_decompose_timeout_sec: int = 240
+    cto_review_timeout_sec: int = 180
     # Part 8 Stage 3-2½ — LLM provider + hardware profile.
     # ``llm_provider`` selects the concrete adapter (ollama = local, cloud =
     # opt-in with env var API key). ``hardware_profile`` is a meta-field that
@@ -260,7 +267,12 @@ class AgentFactory:
             llm=self._llm,
             workspace=self._workspace,
             team=dict(team) if team else {},
-            config=CTOConfig(model=self._config.cto_model),
+            config=CTOConfig(
+                model=self._config.cto_model,
+                timeout_sec=self._config.cto_strategy_timeout_sec,
+                decompose_timeout_sec=self._config.cto_decompose_timeout_sec,
+                review_timeout_sec=self._config.cto_review_timeout_sec,
+            ),
             run_id=self._config.run_id,
         )
 

@@ -29,9 +29,15 @@ from observability.parsers import ParseResponseError, parse_json_response
 DEFAULT_MODEL = "llama3.1:70b"
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 4096
-DEFAULT_TIMEOUT_SEC = 120
-DEFAULT_DECOMPOSE_TIMEOUT_SEC = 60
-DEFAULT_REVIEW_TIMEOUT_SEC = 120
+# Part 8 Stage 3 — bumped after a 16GB MacBook Air Todo E2E hit decompose
+# timeout at the old 60s (qwen3:8b + gemma4:e4b co-resident → swap pressure).
+# Headroom added for all three phases because memory pressure grows
+# monotonically through the run. Override via SystemConfig fields
+# ``cto_strategy_timeout_sec`` / ``cto_decompose_timeout_sec`` /
+# ``cto_review_timeout_sec`` when running on faster hardware.
+DEFAULT_TIMEOUT_SEC = 180
+DEFAULT_DECOMPOSE_TIMEOUT_SEC = 240
+DEFAULT_REVIEW_TIMEOUT_SEC = 180
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAYS = (2.0, 4.0, 8.0)
 _PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "cto" / "strategy.txt"

@@ -46,7 +46,7 @@ async def test_decompose_tasks_returns_topologically_sorted_tasks() -> None:
 
     assert [task.id for task in tasks] == ["backend-api", "frontend-ui", "mlops-ci"]
     kwargs = cast(dict[str, object], llm.calls[0]["kwargs"])
-    assert kwargs["timeout_sec"] == 60
+    assert kwargs["timeout_sec"] == 240
     call = llm.calls[0]
     messages = cast(list[dict[str, object]], call["messages"])
     system_prompt = cast(str, messages[0]["content"])
