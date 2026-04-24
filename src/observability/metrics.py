@@ -49,6 +49,18 @@ class RunSummary:
     avg_duration_sec: float
     total_retries: int
     fallback_count: int = 0
+    # Part 8 Stage 2 (R-10A): peak process memory usage in GB across this run.
+    # Updated opportunistically via MetricsCollector.sample_memory(); remains 0.0
+    # if psutil is unavailable or sampling never invoked.
+    memory_peak_gb: float = 0.0
+
+
+try:
+    import psutil  # type: ignore[import-untyped]
+
+    _PSUTIL_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _PSUTIL_AVAILABLE = False
 
 
 class MetricsCollector:
@@ -57,6 +69,8 @@ class MetricsCollector:
     def __init__(self) -> None:
         self._metrics: list[TaskMetric] = []
         self._fallbacks: list[FallbackMetric] = []
+        # Part 8 Stage 2 (R-10A): per-run peak memory sample (GB).
+        self._memory_peak_by_run: dict[str, float] = {}
 
     def record_task(
         self,
@@ -85,6 +99,25 @@ class MetricsCollector:
             success=success,
             duration_sec=round(duration_sec, 3),
         )
+
+    def sample_memory(self, run_id: str) -> float:
+        """Part 8 Stage 2 (R-10A) — sample current process RSS in GB.
+
+        Updates per-run peak. Returns the peak-so-far for this run. No-op
+        (returns 0.0) when psutil isn't installed.
+        """
+        if not _PSUTIL_AVAILABLE:
+            return 0.0
+        try:
+            rss_bytes = psutil.Process().memory_info().rss
+        except Exception as exc:  # pragma: no cover
+            log.warning("metrics.memory_sample_error", detail=str(exc))
+            return 0.0
+        gb = rss_bytes / (1024**3)
+        prev = self._memory_peak_by_run.get(run_id, 0.0)
+        if gb > prev:
+            self._memory_peak_by_run[run_id] = gb
+        return self._memory_peak_by_run[run_id]
 
     def record_fallback(self, run_id: str, component: str, reason: str) -> None:
         """Part 7 Stage 1 — record a degraded-path activation event."""
@@ -125,6 +158,7 @@ class MetricsCollector:
             avg_duration_sec=round(avg_duration, 3),
             total_retries=sum(m.retries for m in run_metrics),
             fallback_count=fallback_count,
+            memory_peak_gb=round(self._memory_peak_by_run.get(run_id, 0.0), 3),
         )
 
     async def flush(self, storage: StoragePort) -> None:

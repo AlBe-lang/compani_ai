@@ -113,6 +113,16 @@ class SystemConfig:
     llm_concurrency_slm: int = 1
     llm_concurrency_mlops: int = 1
     llm_concurrency_total: int = 2
+    # Part 8 Stage 2 — CEO 대시보드 서버 (Q5 — Jupyter-style token, localhost bind)
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8000
+    # 기본값 빈 문자열 = create_app()이 자동 생성. CLI/env 로 명시 토큰 고정 가능.
+    dashboard_token: str = ""
+    # WebSocket metrics_tick 주기 (초). 0 이면 tick 루프 비활성화.
+    dashboard_poll_interval_sec: float = 5.0
+    # Part 8 Stage 2 (R-09B): 새 프로젝트 실행 시 WorkItem.rework_count 리셋 여부.
+    # True 면 각 run 시작 시 rework_count=0 으로 시작, False 면 누적.
+    rework_reset_on_new_run: bool = True
 
 
 class AgentFactory:

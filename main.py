@@ -161,18 +161,33 @@ async def orchestrate_project(
     )
 
 
-async def app_main(request: str | None = None) -> None:
-    """Bootstrap infrastructure and run the orchestration pipeline."""
+async def app_main(request: str | None = None, dashboard_only: bool = False) -> None:
+    """Bootstrap infrastructure and run the orchestration pipeline.
+
+    Part 8 Stage 2: ``--dashboard`` flag starts the CEO Dashboard HTTP/WS
+    server WITHOUT invoking the generation pipeline, so operators can observe
+    a running project (or a fresh one) without kicking off a new run.
+    """
     import argparse
 
-    if request is None:
+    if request is None and not dashboard_only:
         parser = argparse.ArgumentParser(description="CompaniAI multi-agent code generator")
         parser.add_argument("request", nargs="?", default=None, help="Project description")
+        parser.add_argument(
+            "--dashboard",
+            action="store_true",
+            help="Run the CEO Dashboard HTTP/WS server only (no pipeline).",
+        )
         args = parser.parse_args()
         request = args.request
+        dashboard_only = args.dashboard
+
+    if dashboard_only:
+        await _run_dashboard_server()
+        return
 
     if not request:
-        print('Usage: python main.py "<project description>"')
+        print('Usage: python main.py "<project description>"   OR   --dashboard')
         return
 
     config = SystemConfig()
@@ -246,6 +261,66 @@ async def app_main(request: str | None = None) -> None:
     print(f"Tasks:   {result.completed_tasks}/{result.total_tasks} completed")
     print(f"Files:   {len(result.files_generated)} generated → {result.output_dir}")
     print(f"Time:    {result.duration_seconds:.1f}s")
+
+
+async def _run_dashboard_server() -> None:
+    """Launch the CEO Dashboard HTTP/WS server (Part 8 Stage 2).
+
+    Creates a minimal infrastructure stack so the dashboard has live
+    objects to observe, even when no pipeline is running. When the user
+    wants dashboard + pipeline simultaneously they should run two terminals
+    (``python main.py --dashboard`` + ``python main.py "<request>"``) — a
+    concurrent-pipeline-and-dashboard single command is deferred to Stage 3.
+    """
+    import uvicorn
+
+    from interfaces.dashboard_api import DashboardDeps, create_app
+    from observability.metrics import MetricsCollector
+
+    config = SystemConfig()
+    Path(config.db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    storage = SQLiteStorage(config.db_path)
+    await storage.init()
+
+    bus = InProcessEventBus()
+    workspace = SharedWorkspace(storage=storage, event_bus=bus)
+    dna_manager = DNAManager(storage=storage)
+    metrics = MetricsCollector()
+    factory = AgentFactory(config=config, llm=None, workspace=workspace, queue=None)  # type: ignore[arg-type]
+    limiter = factory.create_concurrency_limiter()
+
+    import uuid as _uuid
+
+    token = config.dashboard_token or _uuid.uuid4().hex
+    deps = DashboardDeps(
+        config=config,
+        auth_token=token,
+        workspace=workspace,
+        dna_manager=dna_manager,
+        metrics=metrics,
+        event_bus=bus,
+        limiter=limiter,
+        poll_interval_sec=config.dashboard_poll_interval_sec,
+    )
+    # Keep config in sync with the actual token used so /api/config shows the
+    # real (masked) value and subsequent mutations don't reset it.
+    config.dashboard_token = token
+
+    app = create_app(deps, print_banner=True)
+
+    uvicorn_config = uvicorn.Config(
+        app,
+        host=config.dashboard_host,
+        port=config.dashboard_port,
+        log_level="info",
+        access_log=False,
+    )
+    server = uvicorn.Server(uvicorn_config)
+    try:
+        await server.serve()
+    finally:
+        await storage.close()
 
 
 def main() -> int:

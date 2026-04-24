@@ -57,6 +57,44 @@ class LLMConcurrencyLimiter:
         self._total = asyncio.Semaphore(total)
         self._config = {"cto": cto, "slm": slm, "mlops": mlops, "total": total}
 
+    def update_limits(
+        self,
+        *,
+        cto: int | None = None,
+        slm: int | None = None,
+        mlops: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        """Part 8 Stage 2 (Q5 hot-reload): swap semaphores so the next
+        ``limit()`` call honours the new caps.
+
+        In-flight ``async with limit(...)`` holders keep using the OLD
+        semaphore they entered — no risk of under-release. Waiters queued
+        on the old semaphore drain naturally as holders exit. This is
+        the same pattern used by asyncio's own connection pools.
+        """
+        if cto is not None:
+            if cto < 1:
+                raise ValueError("cto limit must be >= 1")
+            self._cto = asyncio.Semaphore(cto)
+            self._config["cto"] = cto
+        if slm is not None:
+            if slm < 1:
+                raise ValueError("slm limit must be >= 1")
+            self._slm = asyncio.Semaphore(slm)
+            self._config["slm"] = slm
+        if mlops is not None:
+            if mlops < 1:
+                raise ValueError("mlops limit must be >= 1")
+            self._mlops = asyncio.Semaphore(mlops)
+            self._config["mlops"] = mlops
+        if total is not None:
+            if total < 1:
+                raise ValueError("total limit must be >= 1")
+            self._total = asyncio.Semaphore(total)
+            self._config["total"] = total
+        log.info("llm_concurrency.limits_updated", **self._config)
+
     @asynccontextmanager
     async def limit(self, role: str) -> AsyncIterator[None]:
         """Acquire (total → per-role) semaphore pair for the given role.
