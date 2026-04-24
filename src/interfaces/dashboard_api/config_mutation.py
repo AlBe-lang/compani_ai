@@ -22,7 +22,13 @@ from dataclasses import fields
 from enum import Enum
 from typing import Any
 
-from application.agent_factory import EmbeddingPreset, SystemConfig
+from application.agent_factory import (
+    EmbeddingPreset,
+    HardwareProfile,
+    LLMProviderKind,
+    SystemConfig,
+    apply_hardware_profile,
+)
 from application.peer_review import PeerReviewMode
 from observability.logger import get_logger
 
@@ -143,6 +149,11 @@ def apply_mutation(
     current = getattr(config, field_name)
     coerced = _coerce(current, new_value)
     setattr(config, field_name, coerced)
+    # Cascade: hardware_profile is a meta-field whose change rewrites several
+    # other fields (model names + concurrency). Trigger the cascade here so
+    # PATCH callers only need to send one request for the preset switch.
+    if field_name == "hardware_profile" and isinstance(coerced, HardwareProfile):
+        apply_hardware_profile(config, coerced)
     log.info(
         "config.mutation",
         field=field_name,
@@ -247,4 +258,4 @@ def _mask(value: str) -> str:
 
 
 # Ensure the enums stay referenced so imports don't trip unused-import lint.
-_ = PeerReviewMode, EmbeddingPreset
+_ = PeerReviewMode, EmbeddingPreset, LLMProviderKind

@@ -15,12 +15,17 @@ from adapters.redis_cache import RedisCache
 from adapters.shared_workspace import SharedWorkspace
 from adapters.sqlite_message_queue import SQLiteMessageQueue
 from adapters.sqlite_storage import SQLiteStorage
-from application.agent_factory import AgentFactory, SystemConfig
+from application.agent_factory import (
+    AgentFactory,
+    LLMProviderKind,
+    SystemConfig,
+    create_llm_provider,
+)
 from application.dna_manager import DNAManager
 from application.knowledge_graph import KnowledgeGraph
 from application.stage_gate import GateConfig, GateVerdict, StageGateMeeting
 from domain.contracts import AgentRole, Strategy, Task, TaskResult
-from domain.ports import AgentPort
+from domain.ports import AgentPort, LLMProvider
 from observability.logger import get_logger
 
 
@@ -51,7 +56,7 @@ async def orchestrate_project(
     storage: SQLiteStorage,
     workspace: SharedWorkspace,
     queue: SQLiteMessageQueue,
-    llm: OllamaProvider,
+    llm: LLMProvider,
     knowledge_graph: KnowledgeGraph | None = None,
     dna_manager: DNAManager | None = None,
     stage_gate: StageGateMeeting | None = None,
@@ -216,14 +221,18 @@ async def app_main(request: str | None = None, dashboard_only: bool = False) -> 
     workspace = SharedWorkspace(storage=storage, event_bus=bus)
     queue = SQLiteMessageQueue(storage=storage, knowledge_graph=knowledge_graph)
 
-    async with OllamaProvider(base_url=config.ollama_base_url) as llm:
-        healthy = await llm.health_check()
-        if not healthy:
-            print(f"Ollama not available at {config.ollama_base_url}. Start Ollama and retry.")
-            await storage.close()
-            await qdrant.close()
-            await cache.close()
-            return
+    async with create_llm_provider(config) as llm:
+        # Local Ollama: verify service availability up-front so the user gets a
+        # clear error before decomposition begins. Cloud providers raise on
+        # first call instead (no cheap /api/tags equivalent across vendors).
+        if config.llm_provider is LLMProviderKind.OLLAMA and isinstance(llm, OllamaProvider):
+            healthy = await llm.health_check()
+            if not healthy:
+                print(f"Ollama not available at {config.ollama_base_url}. Start Ollama and retry.")
+                await storage.close()
+                await qdrant.close()
+                await cache.close()
+                return
 
         gate_config = GateConfig(
             max_failure_rate=config.gate_max_failure_rate,

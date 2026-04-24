@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from application.backend_agent import BackendSLMAgent, BackendSLMConfig
 from application.concurrency import LLMConcurrencyLimiter
@@ -40,6 +41,112 @@ if TYPE_CHECKING:
 _DEFAULT_CTO_MODEL = "qwen3:8b"
 _DEFAULT_SLM_MODEL = "gemma4:e4b"
 _DEFAULT_MLOPS_MODEL = "llama3.2:3b"
+
+
+class LLMProviderKind(str, Enum):
+    """Part 8 Stage 3-2½ — LLM provider selection.
+
+    ``ollama`` is the default (fully local). Cloud providers are opt-in and
+    require the corresponding ``<PROVIDER>_API_KEY`` environment variable.
+    Anthropic is the recommended cloud option per Q7 decision (한국어 JSON
+    출력 안정성 + Messages API system-field 일관성).
+    """
+
+    OLLAMA = "ollama"
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GEMINI = "gemini"
+
+
+class HardwareProfile(str, Enum):
+    """Part 8 Stage 3-2½ — hardware-based preset selector.
+
+    Switching profile cascades cto/slm/mlops model names and concurrency
+    settings via :func:`apply_hardware_profile`. ``custom`` means "user has
+    adjusted individual fields; do not cascade preset defaults".
+    """
+
+    MACMINI_16GB = "macmini_16gb"
+    DESKTOP_RTX = "desktop_rtx"
+    SERVER_GPU = "server_gpu"
+    CUSTOM = "custom"
+
+
+# Per-profile cascaded defaults. The CUSTOM profile is intentionally absent
+# so ``apply_hardware_profile`` is a no-op for it. Model names must match
+# what the deploy environment can reasonably pull; server_gpu targets ≥48GB
+# VRAM machines and assumes qwen3.5:35b availability.
+_PROFILE_DEFAULTS: dict[HardwareProfile, dict[str, Any]] = {
+    HardwareProfile.MACMINI_16GB: {
+        "cto_model": "qwen3:8b",
+        "slm_model": "gemma4:e4b",
+        "mlops_model": "llama3.2:3b",
+        "llm_concurrency_cto": 1,
+        "llm_concurrency_slm": 1,
+        "llm_concurrency_mlops": 1,
+        "llm_concurrency_total": 2,
+    },
+    HardwareProfile.DESKTOP_RTX: {
+        "cto_model": "qwen3:14b",
+        "slm_model": "qwen3:8b",
+        "mlops_model": "llama3.2:3b",
+        "llm_concurrency_cto": 1,
+        "llm_concurrency_slm": 2,
+        "llm_concurrency_mlops": 1,
+        "llm_concurrency_total": 3,
+    },
+    HardwareProfile.SERVER_GPU: {
+        "cto_model": "qwen3.5:35b",
+        "slm_model": "qwen3:14b",
+        "mlops_model": "qwen3:8b",
+        "llm_concurrency_cto": 2,
+        "llm_concurrency_slm": 3,
+        "llm_concurrency_mlops": 2,
+        "llm_concurrency_total": 6,
+    },
+}
+
+
+def apply_hardware_profile(config: "SystemConfig", profile: HardwareProfile) -> None:
+    """Cascade a profile's defaults onto ``config``. No-op for CUSTOM."""
+    config.hardware_profile = profile
+    if profile is HardwareProfile.CUSTOM:
+        return
+    for field_name, value in _PROFILE_DEFAULTS[profile].items():
+        setattr(config, field_name, value)
+
+
+@asynccontextmanager
+async def create_llm_provider(config: "SystemConfig") -> AsyncIterator[LLMProvider]:
+    """Yield an ``LLMProvider`` matching ``config.llm_provider``.
+
+    Local import of concrete adapters keeps ``application`` free of
+    adapter-package imports at module top-level (§1.2 dependency direction).
+    Resources are released when the ``async with`` block exits.
+    """
+    kind = config.llm_provider
+    if kind is LLMProviderKind.OLLAMA:
+        from adapters.ollama_provider import OllamaProvider
+
+        async with OllamaProvider(base_url=config.ollama_base_url) as p:
+            yield p
+    elif kind is LLMProviderKind.ANTHROPIC:
+        from adapters.anthropic_provider import AnthropicProvider
+
+        async with AnthropicProvider() as p:
+            yield p
+    elif kind is LLMProviderKind.OPENAI:
+        from adapters.openai_provider import OpenAIProvider
+
+        async with OpenAIProvider() as p:
+            yield p
+    elif kind is LLMProviderKind.GEMINI:
+        from adapters.gemini_provider import GeminiProvider
+
+        async with GeminiProvider() as p:
+            yield p
+    else:
+        raise ValueError(f"unknown llm_provider: {kind!r}")
 
 
 class EmbeddingPreset(str, Enum):
@@ -80,6 +187,12 @@ class SystemConfig:
     cto_model: str = _DEFAULT_CTO_MODEL
     slm_model: str = _DEFAULT_SLM_MODEL
     mlops_model: str = _DEFAULT_MLOPS_MODEL
+    # Part 8 Stage 3-2½ — LLM provider + hardware profile.
+    # ``llm_provider`` selects the concrete adapter (ollama = local, cloud =
+    # opt-in with env var API key). ``hardware_profile`` is a meta-field that
+    # cascades model names + concurrency defaults via apply_hardware_profile.
+    llm_provider: LLMProviderKind = LLMProviderKind.OLLAMA
+    hardware_profile: HardwareProfile = HardwareProfile.MACMINI_16GB
     ollama_base_url: str = "http://localhost:11434"
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     db_path: str = "data/compani.db"
