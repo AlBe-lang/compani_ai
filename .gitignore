@@ -31,3 +31,15 @@ outputs/
 
 # OS artifacts
 .DS_Store
+
+# Part 8 Stage 2 — Flutter/Dart artifacts
+ui/ceo_dashboard/.dart_tool/
+ui/ceo_dashboard/.flutter-plugins
+ui/ceo_dashboard/.flutter-plugins-dependencies
+ui/ceo_dashboard/.packages
+ui/ceo_dashboard/pubspec.lock
+ui/ceo_dashboard/build/
+
+# Benchmark reports
+benchmarks/reports/mock/*.json
+benchmarks/reports/real/*.json

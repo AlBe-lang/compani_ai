@@ -36,3 +36,24 @@ bench-real:
 	$(PYTHON) scripts/benchmark_real.py
 
 bench: bench-mock bench-real
+
+# Part 8 Stage 2 — CEO dashboard targets. See 개발 일지 Part 8 (2).md.
+# dashboard        Python-only backend server (no pipeline run).
+# flutter-pub      Resolve Flutter dependencies (first-time setup).
+# flutter-build    Build static web assets → ui/ceo_dashboard/build/web/.
+# flutter-run      Hot-reload Flutter dev server (for UI iteration).
+# flutter-test     Run Flutter widget tests.
+dashboard:
+	$(PYTHON) main.py --dashboard
+
+flutter-pub:
+	cd ui/ceo_dashboard && flutter pub get
+
+flutter-build:
+	cd ui/ceo_dashboard && flutter build web
+
+flutter-run:
+	cd ui/ceo_dashboard && flutter run -d chrome
+
+flutter-test:
+	cd ui/ceo_dashboard && flutter test
