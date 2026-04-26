@@ -1,12 +1,15 @@
-"""HTTP REST endpoints — Part 8 Stage 2.
+"""HTTP REST endpoints — Part 8 Stage 2 + v1.1 demo entry.
 
 Routes:
-  GET  /api/run/current    — current run snapshot (partial)
-  GET  /api/agents/dna     — every known AgentDNA
-  GET  /api/metrics        — current RunSummary
-  GET  /api/config         — SystemConfig with reload metadata
-  PATCH /api/config        — mutate one field (with classification + confirm)
-  GET  /api/environment    — memory / E5 gate info (R-10F)
+  GET   /api/run/current    — current run snapshot (partial)
+  POST  /api/run            — start a pipeline subprocess (v1.1 demo)
+  POST  /api/cancel         — terminate the running pipeline (v1.1 demo)
+  GET   /api/run/stream     — Server-Sent Events stream of stderr lines
+  GET   /api/agents/dna     — every known AgentDNA
+  GET   /api/metrics        — current RunSummary
+  GET   /api/config         — SystemConfig with reload metadata
+  PATCH /api/config         — mutate one field (with classification + confirm)
+  GET   /api/environment    — memory / E5 gate info (R-10F)
 
 All endpoints require token auth (see auth.verify_http). WebSocket lives in
 websocket.py so this module stays pure REST.
@@ -17,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from observability.logger import get_logger
@@ -44,6 +48,12 @@ class ConfigPatchResponse(BaseModel):
     new_value: Any
     category: str
     message: str
+
+
+class RunStartRequest(BaseModel):
+    """v1.1 demo run payload — natural-language project request."""
+
+    request: str
 
 
 def create_router(deps: "DashboardDeps") -> APIRouter:
@@ -149,6 +159,58 @@ def create_router(deps: "DashboardDeps") -> APIRouter:
     @router.get("/environment", dependencies=[Depends(_auth)])
     async def get_environment() -> dict[str, Any]:
         return environment_snapshot(deps.config)
+
+    # ----- POST /api/run ---------------------------------------------
+    # v1.1 demo entry. RunManager 가 None 이면 503 — pipeline-disabled 모드.
+    @router.post("/run", dependencies=[Depends(_auth)])
+    async def post_run(payload: RunStartRequest) -> dict[str, Any]:
+        if deps.run_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="run manager not configured",
+            )
+        if not payload.request.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="request must not be empty",
+            )
+        try:
+            state = await deps.run_manager.start(payload.request)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return {"run_id": state.run_id, "pid": state.pid, "started_at": state.started_at}
+
+    # ----- POST /api/cancel ------------------------------------------
+    @router.post("/cancel", dependencies=[Depends(_auth)])
+    async def post_cancel() -> dict[str, Any]:
+        if deps.run_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="run manager not configured",
+            )
+        cancelled = await deps.run_manager.cancel()
+        return {"cancelled": cancelled}
+
+    # ----- GET /api/run/stream (SSE) ---------------------------------
+    # 인증은 헤더 대신 ``?token=`` 쿼리만 — EventSource 가 헤더를 못 보내기 때문.
+    # ``verify_http`` 가 query fallback 을 이미 지원하므로 동일 헬퍼 사용.
+    @router.get("/run/stream")
+    async def get_run_stream(request: Request) -> StreamingResponse:
+        verify_http(request, deps.auth_token)
+        if deps.run_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="run manager not configured",
+            )
+        return StreamingResponse(
+            deps.run_manager.stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     return router
 

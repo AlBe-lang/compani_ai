@@ -284,6 +284,7 @@ async def _run_dashboard_server() -> None:
     import uvicorn
 
     from interfaces.dashboard_api import DashboardDeps, create_app
+    from interfaces.dashboard_api.runner import RunManager
     from observability.metrics import MetricsCollector
 
     config = SystemConfig()
@@ -307,6 +308,10 @@ async def _run_dashboard_server() -> None:
     import uuid as _uuid
 
     token = config.dashboard_token or _uuid.uuid4().hex
+    # v1.1 demo entry — RunManager spawns ``main.py "<request>"`` as a child
+    # when the dashboard receives POST /api/run. Subprocess approach is
+    # interim until R-11B (single-process SharedWorkspace) lands in v2.0.
+    run_manager = RunManager(project_root=Path.cwd())
     deps = DashboardDeps(
         config=config,
         auth_token=token,
@@ -315,6 +320,7 @@ async def _run_dashboard_server() -> None:
         metrics=metrics,
         event_bus=bus,
         limiter=limiter,
+        run_manager=run_manager,
         poll_interval_sec=config.dashboard_poll_interval_sec,
     )
     # Keep config in sync with the actual token used so /api/config shows the

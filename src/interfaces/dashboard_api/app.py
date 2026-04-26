@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from domain.ports import EventBusPort, WorkSpacePort
     from observability.metrics import MetricsCollector
 
+    from .runner import RunManager
+
 log = get_logger(__name__)
 
 _DEFAULT_POLL_INTERVAL_SEC = 5.0
@@ -59,6 +61,9 @@ class DashboardDeps:
     metrics: "MetricsCollector | None" = None
     event_bus: "EventBusPort | None" = None
     limiter: "LLMConcurrencyLimiter | None" = None
+    # v1.1 demo entry — POST /api/run lifecycle. Optional so unit tests and
+    # observation-only deployments don't need a running pipeline.
+    run_manager: "RunManager | None" = None
     poll_interval_sec: float = _DEFAULT_POLL_INTERVAL_SEC
     # Internal — assigned by create_app() so websocket endpoint can reach it.
     broadcaster: "DashboardBroadcaster" = field(init=False)
