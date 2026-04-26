@@ -76,18 +76,37 @@ def test_get_config_returns_per_field_metadata() -> None:
     resp = client.get("/api/config", headers=_auth_headers())
     data = resp.json()
     fields_data = data["fields"]
-    # Hot-reloadable field
-    assert fields_data["peer_review_mode"]["category"] == "hot_reloadable"
-    assert "options" in fields_data["peer_review_mode"]
+    # Hot-reloadable field — R-11A 이후 진짜 hot 인 것은 llm_concurrency_* 4종뿐
+    assert fields_data["llm_concurrency_slm"]["category"] == "hot_reloadable"
     # Destructive field
     assert fields_data["embedding_preset"]["category"] == "destructive"
     # Restart-required field
     assert fields_data["cto_model"]["category"] == "restart_required"
+    # R-11A 강등: peer_review_* 는 hot_reloadable 아님 (next run 부터 적용)
+    assert fields_data["peer_review_mode"]["category"] == "restart_required"
+    assert "options" in fields_data["peer_review_mode"]
     # Sensitive masked
     assert fields_data["dashboard_token"].get("sensitive") is True
 
 
 def test_patch_config_hot_reloadable_succeeds_without_confirm() -> None:
+    """llm_concurrency_* 는 LLMConcurrencyLimiter.update_limits() 경유 진짜 hot."""
+    limiter = LLMConcurrencyLimiter()
+    client, _ = _make_app(limiter=limiter)
+    resp = client.patch(
+        "/api/config",
+        headers=_auth_headers(),
+        json={"field": "llm_concurrency_slm", "value": 2},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["category"] == "hot_reloadable"
+    assert limiter.config["slm"] == 2
+
+
+def test_patch_config_restart_required_succeeds_without_confirm() -> None:
+    """R-11A: peer_review_* 등 강등된 필드도 PATCH 자체는 confirm 없이 통과해야
+    한다 (RESTART_REQUIRED 는 destructive 아님). 다만 다음 run 부터 적용."""
     client, deps = _make_app()
     resp = client.patch(
         "/api/config",
@@ -96,7 +115,7 @@ def test_patch_config_hot_reloadable_succeeds_without_confirm() -> None:
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["category"] == "hot_reloadable"
+    assert body["category"] == "restart_required"
     assert deps.config.peer_review_mode is PeerReviewMode.ALL
 
 

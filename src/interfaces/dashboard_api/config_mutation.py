@@ -44,23 +44,19 @@ class ReloadCategory(str, Enum):
 # Classification maps — keep synchronised with Stage 1/2 refactors. Adding a
 # field to ``HOT_RELOADABLE`` requires the corresponding component to read the
 # value at call-time (not cache it at __init__). See 개발 일지(2).md §3.
+#
+# Part 8 Stage 3-4 (R-11A) — peer_review_*/reviewer_selector_*/rework_*/
+# meeting_* 는 강등됐다. 해당 코디네이터들이 PeerReviewConfig 등을 ``__init__``
+# 시점에 캡처해 보유하므로 SystemConfig 변경이 런타임에 전파되지 않는다.
+# 진짜 hot 인 것은 ``LLMConcurrencyLimiter.update_limits()`` 경유 동시성 4종뿐.
+# 강등된 필드는 자동으로 ``RESTART_REQUIRED`` 로 분류된다(다음 run 부터 적용).
 HOT_RELOADABLE: frozenset[str] = frozenset(
     {
-        # Peer review / rework — components now read via SystemConfig ref
-        "peer_review_mode",
-        "peer_review_critical_duration_sec",
-        "reviewer_selector_mode",
-        "rework_enabled",
-        "rework_max_attempts",
         # LLM concurrency — limiter exposes update_limits() at runtime
         "llm_concurrency_cto",
         "llm_concurrency_slm",
         "llm_concurrency_mlops",
         "llm_concurrency_total",
-        # Meeting timeouts — EmergencyMeeting reads on each convene()
-        "meeting_response_timeout_sec",
-        "meeting_cto_max_retries",
-        "meeting_cto_retry_interval_sec",
     }
 )
 
