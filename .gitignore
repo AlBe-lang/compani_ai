@@ -43,3 +43,5 @@ ui/ceo_dashboard/build/
 # Benchmark reports
 benchmarks/reports/mock/*.json
 benchmarks/reports/real/*.json
+# Part 8 Stage 3-4 — E2E run artefacts (대용량 JSON, 매 실행마다 새 파일)
+benchmarks/reports/e2e/**/*.json
