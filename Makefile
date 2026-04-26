@@ -1,9 +1,14 @@
 PYTHON ?= python
 
-.PHONY: setup format lint test test-fast test-e2e e2e e2e-ask e2e-single e2e-preflight bench bench-mock bench-real
+.PHONY: setup format lint test test-fast test-e2e e2e e2e-ask e2e-single e2e-preflight bench bench-mock bench-real pre-commit-install
 
 setup:
 	$(PYTHON) -m pip install -r requirements.txt -r requirements-dev.txt
+
+# Part 8 Stage 3-4 — R-06A: 로컬 git 훅 활성화. setup 후 1회 실행 권고.
+# CI 는 .github/workflows/ci.yml 의 pre-commit job 에서 동일 hooks 강제.
+pre-commit-install:
+	$(PYTHON) -m pre_commit install
 
 format:
 	$(PYTHON) -m black src tests

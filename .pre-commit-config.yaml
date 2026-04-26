@@ -1,0 +1,36 @@
+# Part 8 Stage 3-4 — R-06A: pre-commit 훅 도입.
+# 로컬 권고(make pre-commit-install) + CI 강제(.github/workflows/ci.yml).
+#
+# 수동 실행: pre-commit run --all-files
+# 버전은 requirements-dev.txt 와 동기화 — 한 쪽 변경 시 반대쪽도 갱신할 것.
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^(src|tests|main\.py$)
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        files: ^(src|tests|main\.py$)
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        files: ^(src|tests|main\.py$)
+
+  # mypy 는 프로젝트 venv 에서 직접 실행. mirrors-mypy 격리 venv 는 src 의
+  # 런타임 의존성(pydantic 등)을 모르므로 false-positive 가 다수 발생함.
+  # 로컬은 .venv/bin/python, CI 는 시스템 python — 자동 분기.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (project venv)
+        entry: bash -c 'PY=python; [ -x .venv/bin/python ] && PY=.venv/bin/python; "$PY" -m mypy "$@"' --
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: [src, tests, main.py]
