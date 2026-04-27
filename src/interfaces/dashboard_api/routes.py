@@ -10,6 +10,9 @@ Routes:
   GET   /api/config         — SystemConfig with reload metadata
   PATCH /api/config         — mutate one field (with classification + confirm)
   GET   /api/environment    — memory / E5 gate info (R-10F)
+  GET   /api/output/download — pipeline 산출물 ZIP 다운로드 (v1.1 demo)
+  GET   /api/output/tree     — 산출물 디렉토리 트리 JSON
+  GET   /api/output/file     — 단일 파일 텍스트 미리보기
 
 All endpoints require token auth (see auth.verify_http). WebSocket lives in
 websocket.py so this module stays pure REST.
@@ -17,10 +20,13 @@ websocket.py so this module stays pure REST.
 
 from __future__ import annotations
 
+import io
+import zipfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from observability.logger import get_logger
@@ -28,6 +34,10 @@ from observability.logger import get_logger
 from .auth import verify_http
 from .config_mutation import ConfigMutationError, ReloadCategory, apply_mutation, serialise_config
 from .snapshot import environment_snapshot
+
+OUTPUTS_ROOT = Path("outputs")
+# 산출물 미리보기 최대 크기 (1MB) — 큰 binary 가 메모리 폭주하지 않게
+_MAX_PREVIEW_BYTES = 1_000_000
 
 if TYPE_CHECKING:
     from .app import DashboardDeps
@@ -51,9 +61,15 @@ class ConfigPatchResponse(BaseModel):
 
 
 class RunStartRequest(BaseModel):
-    """v1.1 demo run payload — natural-language project request."""
+    """v1.1 demo run payload — natural-language project request.
+
+    ``mock`` 이 True 면 RunManager 가 ``main.py`` 대신
+    ``scripts/mock_pipeline.py`` 를 spawn — 시연 안전 모드 (Ollama 불필요,
+    ~38초 안에 완전한 파이프라인 시각화). 기본은 False (실제 LLM 호출).
+    """
 
     request: str
+    mock: bool = False
 
 
 def create_router(deps: "DashboardDeps") -> APIRouter:
@@ -175,10 +191,15 @@ def create_router(deps: "DashboardDeps") -> APIRouter:
                 detail="request must not be empty",
             )
         try:
-            state = await deps.run_manager.start(payload.request)
+            state = await deps.run_manager.start(payload.request, mock=payload.mock)
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        return {"run_id": state.run_id, "pid": state.pid, "started_at": state.started_at}
+        return {
+            "run_id": state.run_id,
+            "pid": state.pid,
+            "started_at": state.started_at,
+            "mock": payload.mock,
+        }
 
     # ----- POST /api/cancel ------------------------------------------
     @router.post("/cancel", dependencies=[Depends(_auth)])
@@ -212,6 +233,64 @@ def create_router(deps: "DashboardDeps") -> APIRouter:
             },
         )
 
+    # ----- GET /api/output/download ---------------------------------
+    # outputs/<slug>/ 를 ZIP 으로 압축해 반환. EventSource 와 마찬가지로
+    # 인증은 ``?token=`` 쿼리 fallback 사용 (브라우저 다운로드는 헤더 못 줌).
+    @router.get("/output/download")
+    async def get_output_download(request: Request, slug: str = Query(...)) -> Response:
+        verify_http(request, deps.auth_token)
+        target = _resolve_output_dir(slug)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(target.rglob("*")):
+                if f.is_file():
+                    arcname = str(Path(slug) / f.relative_to(target))
+                    zf.write(f, arcname=arcname)
+        buf.seek(0)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{slug}.zip"'},
+        )
+
+    # ----- GET /api/output/tree -------------------------------------
+    @router.get("/output/tree", dependencies=[Depends(_auth)])
+    async def get_output_tree(slug: str = Query(...)) -> dict[str, Any]:
+        target = _resolve_output_dir(slug)
+        return _build_tree(target, target)
+
+    # ----- GET /api/output/file -------------------------------------
+    # 단일 파일 텍스트 반환 (미리보기). binary 는 첫 N 바이트만 + 표시.
+    @router.get("/output/file")
+    async def get_output_file(
+        request: Request,
+        slug: str = Query(...),
+        path: str = Query(...),
+    ) -> PlainTextResponse:
+        verify_http(request, deps.auth_token)
+        target = _resolve_output_dir(slug)
+        # path traversal 방어 — 정규화 후 target 내부인지 확인
+        resolved = (target / path).resolve()
+        if not str(resolved).startswith(str(target.resolve())):
+            raise HTTPException(status_code=400, detail="invalid path")
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        size = resolved.stat().st_size
+        if size > _MAX_PREVIEW_BYTES:
+            return PlainTextResponse(
+                f"<file too large: {size} bytes — preview disabled. "
+                f"Use download endpoint for full content.>",
+                status_code=200,
+            )
+        try:
+            text = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return PlainTextResponse(
+                f"<binary file: {size} bytes — text preview not available.>",
+                status_code=200,
+            )
+        return PlainTextResponse(text)
+
     return router
 
 
@@ -221,3 +300,35 @@ def _mutation_message(category: ReloadCategory) -> str:
     if category is ReloadCategory.RESTART_REQUIRED:
         return "다음 프로젝트 실행부터 적용됩니다."
     return "파괴적 변경이 적용됐습니다. 컬렉션이 재생성됩니다."
+
+
+def _resolve_output_dir(slug: str) -> Path:
+    """slug 검증 후 outputs/<slug>/ 경로 반환. path traversal / 비존재 가드."""
+    if "/" in slug or ".." in slug or not slug.strip():
+        raise HTTPException(status_code=400, detail="invalid slug")
+    target = (OUTPUTS_ROOT / slug).resolve()
+    root = OUTPUTS_ROOT.resolve()
+    if not str(target).startswith(str(root)):
+        raise HTTPException(status_code=400, detail="invalid slug path")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail=f"output not found: {slug}")
+    return target
+
+
+def _build_tree(root: Path, current: Path) -> dict[str, Any]:
+    """디렉토리 → 트리 JSON 변환. file 은 size 포함, dir 은 children 재귀."""
+    rel = str(current.relative_to(root)) if current != root else ""
+    if current.is_file():
+        return {
+            "name": current.name,
+            "path": rel,
+            "type": "file",
+            "size": current.stat().st_size,
+        }
+    children = sorted(current.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+    return {
+        "name": current.name if rel else "",
+        "path": rel,
+        "type": "dir",
+        "children": [_build_tree(root, c) for c in children],
+    }

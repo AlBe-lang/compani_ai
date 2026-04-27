@@ -23,7 +23,10 @@ dist/
 # Logs / runtime
 *.log
 *.db
-outputs/
+data/
+# outputs/ 의 산출물은 무시하되, mock 데모 템플릿은 예외 (다른 머신에서도 동작 필요)
+outputs/*
+!outputs/.demo_mock_template/
 
 # IDE
 .idea/

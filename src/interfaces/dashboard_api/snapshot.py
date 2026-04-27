@@ -115,20 +115,27 @@ def environment_snapshot(config: "SystemConfig") -> dict[str, Any]:
     """Part 8 Stage 2 (R-10F): surface total system memory so the UI can
     flag EmbeddingPreset.E5_BEST as unavailable on Mac Mini 16GB.
 
-    Returns ``{"total_memory_gb": float | None, "can_use_e5_large": bool}``.
+    Returns total / available memory plus the active embedding preset.
     """
+    total_gb: float | None = None
+    available_gb: float | None = None
+    used_pct: float | None = None
     try:
         import psutil  # type: ignore[import-untyped]
 
-        total_gb = psutil.virtual_memory().total / (1024**3)
+        vm = psutil.virtual_memory()
+        total_gb = vm.total / (1024**3)
+        available_gb = vm.available / (1024**3)
+        used_pct = float(vm.percent)
     except Exception as exc:  # pragma: no cover — psutil missing
         log.warning("snapshot.env_error", detail=str(exc))
-        total_gb = None
     # e5-large is 2.24 GB on disk + runtime overhead; require 24 GB total as a
     # conservative fit threshold on macOS/Windows home machines.
     can_use_e5 = bool(total_gb and total_gb >= 24.0)
     return {
         "total_memory_gb": round(total_gb, 2) if total_gb is not None else None,
+        "available_memory_gb": round(available_gb, 2) if available_gb is not None else None,
+        "memory_used_pct": round(used_pct, 1) if used_pct is not None else None,
         "can_use_e5_large": can_use_e5,
         "current_embedding_preset": config.embedding_preset.value,
     }

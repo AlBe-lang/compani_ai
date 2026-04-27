@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# CompaniAI v1.1 — 시연(MOCK) 데모 런처
+# 사용법: 프로젝트 루트에서  ./demo_mock  실행
+#
+# 동작:
+#   1. 백엔드는 동일 (uvicorn dashboard_api), 다만 RunManager 가
+#      main.py 대신 scripts/mock_pipeline.py 를 spawn 하도록
+#      COMPANI_DEMO_PROGRAM 환경변수 설정
+#   2. 사용자가 web 데모에서 "🚀 제출하기" 누르면 ~38초 안에 완전한
+#      파이프라인 시각화 + 실제 산출물(outputs/todo-rest-api/) 생성
+#   3. Ollama 호출 없음 → 네트워크/하드웨어 변수 0 (시연 안전)
+#
+# 환경변수:
+#   MOCK_SPEED=0.5  # 더 빠르게 (기본 1.0)
+#   MOCK_SPEED=2.0  # 더 천천히 (강조용)
+#
+# 실 데모(./demo)와 같은 포트(8000/5173)를 씁니다 — 동시 실행 불가.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+ROOT="$(pwd)"
+
+BACKEND_LOG="$(mktemp -t compani_mock_backend.XXXXXX)"
+FRONTEND_LOG="$(mktemp -t compani_mock_frontend.XXXXXX)"
+BACKEND_PID=""
+FRONTEND_PID=""
+
+cleanup() {
+  echo ""
+  echo "[mock] 종료 중..."
+  if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+    pkill -P "$FRONTEND_PID" 2>/dev/null || true
+  fi
+  if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill "$BACKEND_PID" 2>/dev/null || true
+    sleep 1
+    kill -9 "$BACKEND_PID" 2>/dev/null || true
+  fi
+  rm -f "$BACKEND_LOG" "$FRONTEND_LOG"
+  echo "[mock] 정리 완료"
+}
+trap cleanup EXIT INT TERM
+
+# ────────────────────────────────────────────────────────────
+# 사전 점검
+# ────────────────────────────────────────────────────────────
+echo ""
+echo "  ╔═══════════════════════════════════════════════════════════╗"
+echo "  ║         CompaniAI v1.1 — 시연(MOCK) 데모                  ║"
+echo "  ║         Ollama 불필요 · ~38초 안에 전체 파이프라인 시각화 ║"
+echo "  ╚═══════════════════════════════════════════════════════════╝"
+echo ""
+
+if [ ! -d "$ROOT/.venv" ]; then
+  echo "[mock] ERROR: .venv 가 없습니다. setup 먼저:"
+  echo "       PYTHON_BIN=/Users/sups/.pyenv/versions/3.11.9/bin/python bash deploy/setup.sh"
+  exit 1
+fi
+if [ ! -d "$ROOT/web_demo/node_modules" ]; then
+  echo "[mock] ERROR: web_demo/node_modules 가 없습니다:"
+  echo "       cd web_demo && npm install"
+  exit 1
+fi
+if [ ! -f "$ROOT/scripts/mock_pipeline.py" ]; then
+  echo "[mock] ERROR: scripts/mock_pipeline.py 가 없습니다."
+  exit 1
+fi
+if [ ! -d "$ROOT/outputs/.demo_mock_template" ]; then
+  echo "[mock] ERROR: outputs/.demo_mock_template 가 없습니다 (산출물 템플릿)."
+  exit 1
+fi
+
+# 포트 충돌 감지
+if lsof -nP -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[mock] ERROR: port 8000 이 이미 점유되어 있습니다 (실 demo 가 살아있나요?)."
+  echo "        먼저 다른 데모를 종료하세요:"
+  echo "          pkill -f 'main.py --dashboard' ; pkill -f vite"
+  exit 1
+fi
+if lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[mock] ERROR: port 5173 이 이미 점유되어 있습니다."
+  echo "          pkill -f vite"
+  exit 1
+fi
+
+# ────────────────────────────────────────────────────────────
+# 1. 백엔드 (mock 모드)
+# ────────────────────────────────────────────────────────────
+echo "[mock] 백엔드 기동 (COMPANI_DEMO_PROGRAM=scripts/mock_pipeline.py)..."
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  COMPANI_DEMO_PROGRAM="scripts/mock_pipeline.py" \
+  MOCK_SPEED="${MOCK_SPEED:-1.0}" \
+  "$ROOT/.venv/bin/python" main.py --dashboard >"$BACKEND_LOG" 2>&1 &
+BACKEND_PID=$!
+
+TOKEN=""
+for i in $(seq 1 60); do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    echo "[mock] ERROR: 백엔드가 시작 도중 죽었습니다. 로그:"
+    cat "$BACKEND_LOG"
+    exit 1
+  fi
+  if grep -q "?token=" "$BACKEND_LOG" 2>/dev/null; then
+    TOKEN=$(grep -oE "\?token=[a-f0-9]+" "$BACKEND_LOG" | head -1 | cut -d= -f2)
+    break
+  fi
+  sleep 0.5
+done
+
+if [ -z "$TOKEN" ]; then
+  echo "[mock] ERROR: 30초 내에 토큰 배너를 찾지 못했습니다. 로그:"
+  cat "$BACKEND_LOG"
+  exit 1
+fi
+
+echo "[mock] 백엔드 OK (pid=$BACKEND_PID, token=${TOKEN:0:8}…)"
+
+# ────────────────────────────────────────────────────────────
+# 2. Frontend (Vite)
+# ────────────────────────────────────────────────────────────
+echo "[mock] Frontend (Vite) 기동..."
+(cd "$ROOT/web_demo" && npm run dev >"$FRONTEND_LOG" 2>&1) &
+FRONTEND_PID=$!
+
+for i in $(seq 1 40); do
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    echo "[mock] ERROR: Frontend 가 시작 도중 죽었습니다."
+    cat "$FRONTEND_LOG"
+    exit 1
+  fi
+  if grep -qE "(Local:|ready in)" "$FRONTEND_LOG" 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+
+URL="http://localhost:5173/?token=$TOKEN"
+
+# ────────────────────────────────────────────────────────────
+# 3. 안내
+# ────────────────────────────────────────────────────────────
+echo ""
+echo "  ╔═══════════════════════════════════════════════════════════╗"
+echo "  ║  MOCK 데모 실행 중 (Ollama 미사용, ~38초 시연)            ║"
+echo "  ╚═══════════════════════════════════════════════════════════╝"
+echo "  $URL"
+echo ""
+echo "  발표 시연 팁:"
+echo "  1. 브라우저가 자동으로 열립니다 (안 뜨면 위 URL 복사)"
+echo "  2. 추천 프리셋 첫 번째 'Todo REST API' 클릭"
+echo "  3. '🚀 제출하기' 누르면 ~38초 안에 5단계 모두 ✅"
+echo "  4. Task 진행 상세 표가 실시간으로 채워집니다"
+echo "  5. Q&A · Peer review 메시지가 시간차로 표시됩니다"
+echo "  6. 종료 후 산출물:"
+echo "     open outputs/todo-rest-api-mock"
+echo ""
+echo "  종료: Ctrl+C"
+echo ""
+
+sleep 1
+open "$URL" 2>/dev/null || echo "[mock] 브라우저를 자동으로 열지 못했습니다. URL 을 직접 복사하세요."
+
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
+  sleep 1
+done
+
+echo "[mock] 프로세스 중 하나가 종료되었습니다."

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -85,8 +86,12 @@ class RunManager:
         state = self._current
         return state is not None and not state.finished.is_set()
 
-    async def start(self, request: str) -> RunState:
-        """Launch ``main.py "<request>"`` as a child and begin event capture."""
+    async def start(self, request: str, *, mock: bool = False) -> RunState:
+        """Launch a pipeline subprocess and begin event capture.
+
+        ``mock=False`` (기본): ``main.py "<request>"`` 실 멀티에이전트 파이프라인.
+        ``mock=True``: ``scripts/mock_pipeline.py "<request>"`` 시연용 mock.
+        """
         if not request.strip():
             raise ValueError("request must not be empty")
         async with self._start_lock:
@@ -103,9 +108,17 @@ class RunManager:
             if not python.exists():
                 python = Path(sys.executable)
 
+            # 시연 안전: mock=True 일 때 mock_pipeline.py spawn.
+            # 환경변수 COMPANI_DEMO_PROGRAM 도 백워드 호환으로 지원
+            # (./demo_mock 같은 외부 런처에서 강제 mock 모드).
+            if mock:
+                program = "scripts/mock_pipeline.py"
+            else:
+                program = os.environ.get("COMPANI_DEMO_PROGRAM", "main.py")
+
             proc = await asyncio.create_subprocess_exec(
                 str(python),
-                "main.py",
+                program,
                 request,
                 cwd=str(self._project_root),
                 stdout=asyncio.subprocess.PIPE,
@@ -120,6 +133,8 @@ class RunManager:
             run_id=run_id,
             pid=proc.pid,
             request_chars=len(request),
+            mock=mock,
+            program=program,
         )
         asyncio.create_task(self._consume_stderr(state))
         asyncio.create_task(self._drain_stdout(state))

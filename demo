@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# CompaniAI v1.1 데모 런처
+# 사용법: 프로젝트 루트에서  ./demo  실행
+#
+# 동작:
+#   1. Ollama 가용성 확인
+#   2. 백엔드 (uvicorn) 백그라운드 기동 → 토큰 추출
+#   3. Frontend (Vite) 백그라운드 기동
+#   4. 브라우저 자동 오픈 (http://localhost:5173/?token=…)
+#   5. Ctrl+C 시 두 프로세스 모두 정리
+
+set -euo pipefail
+
+# 스크립트가 어디서 호출되든 프로젝트 루트로 이동
+cd "$(dirname "$0")"
+ROOT="$(pwd)"
+
+BACKEND_LOG="$(mktemp -t compani_demo_backend.XXXXXX)"
+FRONTEND_LOG="$(mktemp -t compani_demo_frontend.XXXXXX)"
+BACKEND_PID=""
+FRONTEND_PID=""
+
+cleanup() {
+  echo ""
+  echo "[demo] 종료 중..."
+  if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+    # vite 가 자식 프로세스를 남기는 경우 대비
+    pkill -P "$FRONTEND_PID" 2>/dev/null || true
+  fi
+  if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill "$BACKEND_PID" 2>/dev/null || true
+    sleep 1
+    kill -9 "$BACKEND_PID" 2>/dev/null || true
+  fi
+  rm -f "$BACKEND_LOG" "$FRONTEND_LOG"
+  echo "[demo] 정리 완료"
+}
+trap cleanup EXIT INT TERM
+
+# ────────────────────────────────────────────────────────────
+# 사전 점검
+# ────────────────────────────────────────────────────────────
+echo "[demo] 사전 점검..."
+
+if [ ! -d "$ROOT/.venv" ]; then
+  echo "[demo] ERROR: .venv 가 없습니다. 먼저 다음을 실행하세요:"
+  echo "       PYTHON_BIN=/Users/sups/.pyenv/versions/3.11.9/bin/python bash deploy/setup.sh"
+  exit 1
+fi
+
+if [ ! -d "$ROOT/web_demo/node_modules" ]; then
+  echo "[demo] ERROR: web_demo/node_modules 가 없습니다. 먼저 다음을 실행하세요:"
+  echo "       cd web_demo && npm install"
+  exit 1
+fi
+
+# Ollama 확인 (없으면 경고만, 진행은 함)
+if ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+  echo "[demo] WARN: Ollama 가 응답하지 않습니다 (http://localhost:11434)."
+  echo "        파이프라인 실행 시 E-LLM-UNAVAILABLE 발생할 수 있습니다."
+  echo "        터미널에서 'ollama serve' 또는 Ollama.app 실행 후 다시 시도하세요."
+  echo ""
+fi
+
+# ────────────────────────────────────────────────────────────
+# 1. 백엔드 기동
+# ────────────────────────────────────────────────────────────
+echo "[demo] 백엔드 기동..."
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  "$ROOT/.venv/bin/python" main.py --dashboard >"$BACKEND_LOG" 2>&1 &
+BACKEND_PID=$!
+
+# 토큰 배너 대기 (최대 30초)
+TOKEN=""
+for i in $(seq 1 60); do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    echo "[demo] ERROR: 백엔드가 시작 도중 죽었습니다. 로그:"
+    cat "$BACKEND_LOG"
+    exit 1
+  fi
+  if grep -q "?token=" "$BACKEND_LOG" 2>/dev/null; then
+    TOKEN=$(grep -oE "\?token=[a-f0-9]+" "$BACKEND_LOG" | head -1 | cut -d= -f2)
+    break
+  fi
+  sleep 0.5
+done
+
+if [ -z "$TOKEN" ]; then
+  echo "[demo] ERROR: 30초 내에 토큰 배너를 찾지 못했습니다. 로그:"
+  cat "$BACKEND_LOG"
+  exit 1
+fi
+
+echo "[demo] 백엔드 OK (pid=$BACKEND_PID, token=${TOKEN:0:8}…)"
+
+# ────────────────────────────────────────────────────────────
+# 2. Frontend 기동
+# ────────────────────────────────────────────────────────────
+echo "[demo] Frontend (Vite) 기동..."
+(cd "$ROOT/web_demo" && npm run dev >"$FRONTEND_LOG" 2>&1) &
+FRONTEND_PID=$!
+
+# Vite ready 대기 (최대 20초)
+for i in $(seq 1 40); do
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    echo "[demo] ERROR: Frontend 가 시작 도중 죽었습니다. 로그:"
+    cat "$FRONTEND_LOG"
+    exit 1
+  fi
+  if grep -qE "(Local:|ready in)" "$FRONTEND_LOG" 2>/dev/null; then
+    break
+  fi
+  sleep 0.5
+done
+
+URL="http://localhost:5173/?token=$TOKEN"
+
+# ────────────────────────────────────────────────────────────
+# 3. 브라우저 오픈 + 안내
+# ────────────────────────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  CompaniAI v1.1 데모 실행 중"
+echo "  $URL"
+echo ""
+echo "  • Backend log:  $BACKEND_LOG"
+echo "  • Frontend log: $FRONTEND_LOG"
+echo "  • 종료: Ctrl+C"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
+
+# 1초 후 브라우저 오픈 (Vite 가 완전히 listen 할 시간 확보)
+sleep 1
+open "$URL" 2>/dev/null || echo "[demo] 브라우저를 자동으로 열지 못했습니다. 위 URL 을 직접 복사하세요."
+
+# 두 프로세스 중 하나라도 죽으면 종료
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
+  sleep 1
+done
+
+echo "[demo] 프로세스 중 하나가 종료되었습니다."
